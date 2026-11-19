@@ -18,6 +18,9 @@ export default defineConfig(({ mode }) => {
     server: {
       port: Number(env.PORT || 12000),
       host: true,
+      // The published runtime host is not localhost, so Vite's host check must
+      // allow it or every request answers 403 "Blocked request".
+      allowedHosts: true,
       proxy: {
         '/api': { target, changeOrigin: true },
         '/uploads': { target, changeOrigin: true },
@@ -27,6 +30,7 @@ export default defineConfig(({ mode }) => {
     preview: {
       port: Number(env.PORT || 12000),
       host: true,
+      allowedHosts: true,
       proxy: {
         '/api': { target, changeOrigin: true },
         '/uploads': { target, changeOrigin: true },
