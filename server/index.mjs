@@ -1241,7 +1241,22 @@ app.get('/api/teams/:teamId/calendar', authRequired, wrap(async (req, res) => {
 
   const events = [];
 
+  // The TEAM calendar is for shared commitments. A 1:1 call between two people
+  // and a DM huddle are private, so they belong on the participants' own view,
+  // not on everyone's team calendar. `scope=mine` shows those too.
+  const scope = String(req.query.scope || 'team');
   for (const call of db.calls.filter((c) => c.teamId === team.id)) {
+    const isPersonal = !!call.isDirect || !!call.channelId;
+    const mine = call.hostId === req.user.id
+      || (call.inviteeIds || []).includes(req.user.id)
+      || (call.participants || []).includes(req.user.id);
+
+    if (scope === 'team' && isPersonal) continue;
+    if (scope === 'mine' && !mine) continue;
+    // Ended meetings are history, not calendar commitments. `scope=all` keeps
+    // them for anyone auditing the month.
+    if (scope !== 'all' && call.status === 'ended') continue;
+
     const at = call.scheduledAt || call.startedAt || call.createdAt;
     if (!inRange(at)) continue;
     events.push({
@@ -1255,6 +1270,12 @@ app.get('/api/teams/:teamId/calendar', authRequired, wrap(async (req, res) => {
       hostName: db.users.find((u) => u.id === call.hostId)?.name || '',
       attendeeCount: (call.inviteeIds || []).length,
       description: call.description || '',
+      isPersonal,
+      reminders: call.reminders || [],
+      remindersSent: call.remindersSent || [],
+      inviteeNames: (call.inviteeIds || [])
+        .map((id) => db.users.find((u) => u.id === id)?.name)
+        .filter(Boolean),
     });
   }
 
@@ -1298,6 +1319,7 @@ app.get('/api/teams/:teamId/calendar', authRequired, wrap(async (req, res) => {
   events.sort((a, b) => a.at.localeCompare(b.at));
   res.json({
     team: teamView(team, req.user.id),
+    scope,
     events,
     counts: {
       meeting: events.filter((e) => e.kind === 'meeting').length,
@@ -1632,8 +1654,17 @@ app.post('/api/teams/:teamId/calls', authRequired, wrap(async (req, res) => {
     reminders: Array.isArray(reminders)
       ? reminders.map((n) => Number(n)).filter((n) => Number.isFinite(n) && n >= 0).slice(0, 5)
       : [],
+    // Offsets whose fire time has already passed are marked as sent up front.
+    // Otherwise a meeting created 2 minutes out with a "10 min before"
+    // reminder would fire the instant it is saved.
     remindersSent: [],
   };
+  if (call.scheduledAt) {
+    const startMs = new Date(call.scheduledAt).getTime();
+    if (Number.isFinite(startMs)) {
+      call.remindersSent = call.reminders.filter((offset) => startMs - offset * 60000 <= Date.now());
+    }
+  }
   db.calls.push(call);
   persist();
 
@@ -1997,6 +2028,13 @@ function reminderTick() {
       if (call.remindersSent.includes(offset)) continue;
       const fireAt = startMs - offset * 60000;
       if (nowMs < fireAt) continue;
+      // More than 15 minutes late means the reminder is no longer useful —
+      // record it as handled rather than firing a stale "starts in 10 min".
+      if (nowMs - fireAt > 15 * 60000) {
+        call.remindersSent.push(offset);
+        changed = true;
+        continue;
+      }
 
       call.remindersSent.push(offset);
       changed = true;

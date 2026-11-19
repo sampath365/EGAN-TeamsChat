@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import {
   CalendarDays, ChevronLeft, ChevronRight, Clock, KanbanSquare, Palmtree, Plus, Users, Video,
+  Bell,
 } from 'lucide-react';
 import { useApp } from '@/context/AppContext';
 import { api } from '@/lib/api';
@@ -26,16 +27,17 @@ export function CalendarPage() {
   const [cursor, setCursor] = useState(() => startOfMonth(new Date()));
   const [selected, setSelected] = useState<Date>(new Date());
   const [filter, setFilter] = useState<'all' | 'meeting' | 'task' | 'ooo'>('all');
+  const [scope, setScope] = useState<'team' | 'mine'>('team');
   const [detail, setDetail] = useState<CalendarEvent | null>(null);
 
   useEffect(() => {
     if (!team) return;
     setLoading(true);
-    api.calendar(team.id)
+    api.calendar(team.id, { scope })
       .then(({ events: rows }) => setEvents(rows))
       .catch((e) => toast({ title: 'Could not load the calendar', body: e.message, tone: 'error' }))
       .finally(() => setLoading(false));
-  }, [team?.id, toast]);
+  }, [team?.id, scope, toast]);
 
   const filtered = useMemo(
     () => (filter === 'all' ? events : events.filter((e) => e.kind === filter)),
@@ -98,6 +100,11 @@ export function CalendarPage() {
             <p className="mt-0.5 text-[12.5px] text-muted">
               {counts.meeting} meetings · {counts.task} task due dates · {counts.ooo} out of office
             </p>
+            <p className="mt-0.5 text-[11px] text-muted">
+              {scope === 'team'
+                ? 'Shared commitments only — 1:1 calls stay private.'
+                : 'Everything you are part of, including 1:1 calls.'}
+            </p>
           </div>
           <div className="flex items-center gap-1">
             <IconButton label="Previous month" onClick={() => setCursor(new Date(cursor.getFullYear(), cursor.getMonth() - 1, 1))}>
@@ -113,7 +120,24 @@ export function CalendarPage() {
         </div>
 
         <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-          <h2 className="text-[15px] font-extrabold">{monthLabel}</h2>
+          <div className="flex items-center gap-2">
+            <h2 className="text-[15px] font-extrabold">{monthLabel}</h2>
+            <div className="flex rounded-xl border p-0.5 bordered">
+              {(['team', 'mine'] as const).map((sc) => (
+                <button
+                  key={sc}
+                  type="button"
+                  onClick={() => setScope(sc)}
+                  className={cn(
+                    'rounded-lg px-2.5 py-1 text-[11px] font-bold capitalize transition',
+                    scope === sc ? 'bg-brand-600 text-white' : 'text-muted hover:text-ink-800 dark:hover:text-ink-100',
+                  )}
+                >
+                  {sc === 'team' ? 'Team' : 'Mine'}
+                </button>
+              ))}
+            </div>
+          </div>
           <Tabs
             value={filter}
             onChange={setFilter}
@@ -251,6 +275,16 @@ export function CalendarPage() {
               <>
                 {detail.hostName && <p className="flex items-center gap-1.5 text-[12.5px]"><Avatar name={detail.hostName} size={18} /> Hosted by {detail.hostName}</p>}
                 {!!detail.attendeeCount && <p className="flex items-center gap-1.5 text-[12.5px] text-muted"><Users size={13} /> {detail.attendeeCount} invited</p>}
+                {!!detail.inviteeNames?.length && (
+                  <p className="text-[11.5px] text-muted">{detail.inviteeNames.join(', ')}</p>
+                )}
+                <p className="flex items-center gap-1.5 text-[12px] text-muted">
+                  <Bell size={12} />
+                  {detail.reminders && detail.reminders.length > 0
+                    ? `Reminders: ${detail.reminders.map((r) => (r === 0 ? 'at start' : `${r} min before`)).join(', ')}`
+                    : 'No reminders set'}
+                </p>
+                {detail.isPersonal && <Badge tone="neutral">private 1:1</Badge>}
                 {detail.description && <p className="rounded-xl bg-[rgb(var(--surface-2))] px-3 py-2 text-[12px]">{detail.description}</p>}
                 <Link to={detail.link.replace('#', '')} className="btn-primary w-full text-[12.5px]"><Video size={14} /> Open meeting</Link>
               </>

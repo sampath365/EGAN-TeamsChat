@@ -17,7 +17,7 @@ export function MeetingsPage() {
   const [when, setWhen] = useState('');
   const [description, setDescription] = useState('');
   const [invitees, setInvitees] = useState<string[]>([]);
-  const [reminders, setReminders] = useState<number[]>([10]);
+  const [reminders, setReminders] = useState<number[]>([]);
   const [sendEmail, setSendEmail] = useState(true);
   const [busy, setBusy] = useState(false);
 
@@ -209,6 +209,11 @@ export function MeetingsPage() {
         {!!when && (
           <>
             <label className="label mt-3">Remind invitees</label>
+            <p className="mb-1.5 text-[10.5px] text-muted">
+              {reminders.length === 0
+                ? 'No reminders — the meeting is on the calendar only.'
+                : `${reminders.length} reminder${reminders.length === 1 ? '' : 's'} set.`}
+            </p>
             <div className="flex flex-wrap gap-1.5">
               {REMINDER_CHOICES.map((mins) => {
                 const on = reminders.includes(mins);

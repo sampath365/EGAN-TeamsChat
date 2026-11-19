@@ -25,6 +25,10 @@ export interface CalendarEvent {
   userId?: string;
   message?: string;
   delegateName?: string;
+  isPersonal?: boolean;
+  reminders?: number[];
+  remindersSent?: number[];
+  inviteeNames?: string[];
 }
 
 export interface User {

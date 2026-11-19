@@ -63,12 +63,13 @@ export const api = {
   me: () => get<{ user: User }>('/auth/me'),
   updateMe: (input: Partial<Pick<User, 'name' | 'title' | 'status' | 'statusText' | 'avatarUrl'>> & { outOfOffice?: OutOfOffice | null }) =>
     patch<{ user: User }>('/auth/me', input),
-  calendar: (teamId: string, range: { from?: string; to?: string } = {}) => {
+  calendar: (teamId: string, range: { from?: string; to?: string; scope?: 'team' | 'mine' | 'all' } = {}) => {
     const q = new URLSearchParams();
     if (range.from) q.set('from', range.from);
     if (range.to) q.set('to', range.to);
+    if (range.scope) q.set('scope', range.scope);
     const s = q.toString();
-    return get<{ events: CalendarEvent[]; counts: { meeting: number; task: number; ooo: number } }>(`/teams/${teamId}/calendar${s ? `?${s}` : ''}`);
+    return get<{ scope: string; events: CalendarEvent[]; counts: { meeting: number; task: number; ooo: number } }>(`/teams/${teamId}/calendar${s ? `?${s}` : ''}`);
   },
   users: () => get<{ users: User[] }>('/users'),
   profile: (userId: string) => get<UserProfile>(`/users/${userId}`),
