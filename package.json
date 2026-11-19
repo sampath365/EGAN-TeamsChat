@@ -1,0 +1,38 @@
+{
+  "name": "egan-pulse",
+  "private": true,
+  "version": "1.0.0",
+  "description": "EGAN Pulse — advanced realtime team collaboration: chat, threads, meetings with screen sharing, tasks, files, notes and role-based access.",
+  "type": "module",
+  "scripts": {
+    "dev": "node scripts/dev.mjs",
+    "dev:api": "node server/index.mjs",
+    "dev:web": "vite --port 12000",
+    "build": "tsc --noEmit -p tsconfig.app.json && vite build",
+    "typecheck": "tsc --noEmit -p tsconfig.app.json",
+    "preview": "vite preview --port 12000",
+    "start": "node server/index.mjs",
+    "serve": "node server/index.mjs --serve-dist"
+  },
+  "dependencies": {
+    "clsx": "^2.1.1",
+    "express": "^4.21.2",
+    "lucide-react": "^0.446.0",
+    "multer": "^2.0.2",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "react-router-dom": "^6.30.0",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "@types/react": "^18.3.18",
+    "@types/react-dom": "^18.3.5",
+    "@vitejs/plugin-react": "^4.3.4",
+    "autoprefixer": "^10.4.20",
+    "postcss": "^8.4.49",
+    "tailwindcss": "^3.4.17",
+    "typescript": "^5.6.3",
+    "vite": "^5.4.11"
+  }
+}
