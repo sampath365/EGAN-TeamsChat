@@ -1,10 +1,14 @@
 import { useMemo, useState } from 'react';
-import { Check, Copy, Crown, Link2, Mail, Search, Shield, ShieldCheck, UserMinus, Users, UserPlus, X } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
+import {
+  Check, Copy, Crown, Link2, Mail, Search, Shield, ShieldCheck, UserMinus, Users, UserPlus, X,
+  Video, EyeOff, Eye, BellOff, BellRing, UserRoundPlus, CheckSquare, Square, MessageSquare,
+} from 'lucide-react';
 import { useApp } from '@/context/AppContext';
 import { api } from '@/lib/api';
 import type { Membership, Role } from '@/lib/types';
 import { cn, copyText, timeAgo } from '@/lib/utils';
-import { Avatar, Badge, IconButton, Modal, Spinner } from '@/components/ui';
+import { Avatar, Badge, IconButton, Modal, Spinner, Switch } from '@/components/ui';
 import { PersonCard } from '@/components/PersonCard';
 
 const ROLE_TONE: Record<string, 'brand' | 'violet' | 'neutral' | 'amber'> = {
@@ -14,21 +18,31 @@ const ROLE_TONE: Record<string, 'brand' | 'violet' | 'neutral' | 'amber'> = {
 export function PeoplePage() {
   const {
     members, online, team, can, permissionDefs, toast, refreshTeam, user, myPermissions,
+    addMember, hiddenPeople, hidePerson, unhidePerson, startGroupCall,
   } = useApp();
+  const navigate = useNavigate();
   const [query, setQuery] = useState('');
   const [roleFilter, setRoleFilter] = useState<'all' | Role>('all');
   const [managing, setManaging] = useState<Membership | null>(null);
   const [inviteOpen, setInviteOpen] = useState(false);
   const [profileId, setProfileId] = useState<string | null>(null);
+  const [addOpen, setAddOpen] = useState(false);
+  const [selected, setSelected] = useState<string[]>([]);
+  const [selectMode, setSelectMode] = useState(false);
+  const [showHidden, setShowHidden] = useState(false);
+  const [calling, setCalling] = useState(false);
+
+  const hiddenIds = useMemo(() => new Set(hiddenPeople.map((h) => h.targetUserId)), [hiddenPeople]);
 
   const filtered = useMemo(() => {
     const q = query.toLowerCase();
     return members.filter((m) => {
+      if (hiddenIds.has(m.userId)) return false;
       if (roleFilter !== 'all' && m.role !== roleFilter) return false;
       if (!q) return true;
       return m.user?.name.toLowerCase().includes(q) || m.user?.email.toLowerCase().includes(q) || (m.user?.title || '').toLowerCase().includes(q);
     });
-  }, [members, query, roleFilter]);
+  }, [members, query, roleFilter, hiddenIds]);
 
   const onlineCount = members.filter((m) => online.has(m.userId)).length;
 
@@ -53,12 +67,70 @@ export function PeoplePage() {
               View company hierarchy →
             </a>
           </div>
-          {can('member.invite') && (
-            <button type="button" className="btn-primary" onClick={() => setInviteOpen(true)}>
-              <UserPlus size={15} /> Invite people
+          <div className="flex flex-wrap items-center gap-1.5">
+            {can('member.invite') && (
+              <button type="button" className="btn-primary" onClick={() => setAddOpen(true)}>
+                <UserRoundPlus size={15} /> Add person
+              </button>
+            )}
+            {can('member.invite') && (
+              <button type="button" className="btn-outline text-[12.5px]" onClick={() => setInviteOpen(true)}>
+                <Link2 size={14} /> Invite link
+              </button>
+            )}
+            <button
+              type="button"
+              className={selectMode ? 'btn-soft text-[12.5px]' : 'btn-outline text-[12.5px]'}
+              onClick={() => { setSelectMode((v) => !v); setSelected([]); }}
+            >
+              {selectMode ? <X size={14} /> : <CheckSquare size={14} />} {selectMode ? 'Cancel' : 'Select'}
             </button>
-          )}
+            {hiddenPeople.length > 0 && (
+              <button type="button" className="btn-outline text-[12.5px]" onClick={() => setShowHidden(true)}>
+                <EyeOff size={14} /> Hidden ({hiddenPeople.length})
+              </button>
+            )}
+          </div>
         </div>
+
+        {selectMode && (
+          <div className="mb-3 flex flex-wrap items-center justify-between gap-2 rounded-2xl border border-brand-200 bg-brand-50/70 px-3 py-2.5 dark:border-brand-400/30 dark:bg-brand-500/10 bordered">
+            <p className="text-[12.5px] font-semibold">
+              {selected.length === 0
+                ? 'Select people to start a group call'
+                : `${selected.length} selected — ${selected.length + 1} in the call with you`}
+            </p>
+            <div className="flex items-center gap-1.5">
+              <button
+                type="button"
+                className="btn-ghost h-8 px-2.5 text-[12px]"
+                onClick={() => setSelected(selected.length === filtered.length ? [] : filtered.map((m) => m.userId))}
+              >
+                {selected.length === filtered.length ? 'Clear all' : 'Select all'}
+              </button>
+              <button
+                type="button"
+                className="btn-primary h-8 px-3 text-[12px]"
+                disabled={selected.length === 0 || calling || !can('meeting.host')}
+                onClick={async () => {
+                  setCalling(true);
+                  try {
+                    const call = await startGroupCall(selected);
+                    setSelectMode(false);
+                    setSelected([]);
+                    navigate(`/meeting/${call.id}`);
+                  } catch (e: any) {
+                    toast({ title: 'Could not start the group call', body: e.message, tone: 'error' });
+                  } finally {
+                    setCalling(false);
+                  }
+                }}
+              >
+                <Video size={14} /> {calling ? 'Starting…' : `Group call${selected.length ? ` (${selected.length + 1})` : ''}`}
+              </button>
+            </div>
+          </div>
+        )}
 
         <div className="mb-3 flex flex-wrap items-center gap-2">
           <div className="relative flex-1 sm:max-w-xs">
@@ -107,6 +179,32 @@ export function PeoplePage() {
                 </p>
               </button>
               <div className="flex shrink-0 items-center gap-1">
+                {selectMode && (
+                  <button
+                    type="button"
+                    aria-label={selected.includes(m.userId) ? 'Deselect' : 'Select'}
+                    onClick={() => setSelected((prev) => (prev.includes(m.userId) ? prev.filter((id) => id !== m.userId) : [...prev, m.userId]))}
+                    className={cn('flex h-7 w-7 items-center justify-center rounded-lg transition', selected.includes(m.userId) ? 'bg-brand-600 text-white' : 'text-muted hover:bg-ink-100 dark:hover:bg-white/10')}
+                  >
+                    {selected.includes(m.userId) ? <Check size={14} /> : <Square size={14} />}
+                  </button>
+                )}
+                {!selectMode && m.userId !== user?.id && (
+                  <>
+                    <IconButton label="Message this person" onClick={() => setProfileId(m.userId)}>
+                      <MessageSquare size={14} />
+                    </IconButton>
+                    <IconButton
+                      label="Hide from my list"
+                      onClick={async () => {
+                        await hidePerson(m.userId);
+                        toast({ title: `${m.user.name} hidden`, body: 'Restore them from Hidden.', tone: 'success' });
+                      }}
+                    >
+                      <EyeOff size={14} />
+                    </IconButton>
+                  </>
+                )}
                 {m.permissions?.length > 0 && (
                   <span title={`${m.permissions.length} extra permissions`} className="text-[10px] font-bold text-violet-600 dark:text-violet-300">
                     +{m.permissions.length}
@@ -140,6 +238,33 @@ export function PeoplePage() {
       <InviteModal open={inviteOpen} onClose={() => setInviteOpen(false)} teamId={team?.id || ''} />
 
       <PersonCard userId={profileId} open={!!profileId} onClose={() => setProfileId(null)} />
+
+      <AddPersonModal
+        open={addOpen}
+        onClose={() => setAddOpen(false)}
+        members={members}
+        onAdd={async (payload) => {
+          const result = await addMember(payload);
+          toast({
+            title: result.created ? `${result.user.name} added` : `${result.user.name} added to the team`,
+            body: result.temporaryPassword
+              ? `Temporary password: ${result.temporaryPassword}`
+              : undefined,
+            tone: 'success',
+          });
+          setAddOpen(false);
+        }}
+      />
+
+      <HiddenPeopleModal
+        open={showHidden}
+        onClose={() => setShowHidden(false)}
+        hidden={hiddenPeople}
+        onRestore={async (id) => {
+          await unhidePerson(id);
+          toast({ title: 'Restored', tone: 'success' });
+        }}
+      />
     </div>
   );
 }
@@ -328,6 +453,127 @@ function InviteModal({ open, onClose, teamId }: { open: boolean; onClose: () => 
             <input className="input pl-8" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="teammate@company.com" />
           </div>
         </>
+      )}
+    </Modal>
+  );
+}
+
+/* --------------------------------------------------------- add a person */
+
+function AddPersonModal({
+  open, onClose, members, onAdd,
+}: {
+  open: boolean;
+  onClose: () => void;
+  members: Membership[];
+  onAdd: (payload: { email: string; name?: string; role?: string; position?: string; department?: string; managerId?: string | null; password?: string }) => Promise<void>;
+}) {
+  const [email, setEmail] = useState('');
+  const [name, setName] = useState('');
+  const [role, setRole] = useState<'member' | 'admin' | 'guest'>('member');
+  const [position, setPosition] = useState('');
+  const [department, setDepartment] = useState('');
+  const [managerId, setManagerId] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const submit = async () => {
+    setError(null);
+    setBusy(true);
+    try {
+      await onAdd({ email, name, role, position, department, managerId: managerId || null });
+      setEmail(''); setName(''); setPosition(''); setDepartment(''); setManagerId(''); setRole('member');
+    } catch (e: any) {
+      setError(e.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Modal
+      open={open}
+      onClose={onClose}
+      title="Add a person"
+      subtitle="They are added to this team straight away — no invite link needed."
+      footer={
+        <>
+          <button type="button" className="btn-ghost" onClick={onClose}>Cancel</button>
+          <button type="button" className="btn-primary" disabled={!email.trim() || busy} onClick={() => void submit()}>
+            <UserPlus size={14} /> {busy ? 'Adding…' : 'Add person'}
+          </button>
+        </>
+      }
+    >
+      <label className="label">Email address</label>
+      <input className="input" autoFocus type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="teammate@company.com" />
+      <p className="mt-1 text-[10.5px] text-muted">
+        If this email already has an account, that person is added to the team. Otherwise an account is created.
+      </p>
+
+      <div className="mt-3 grid gap-3 sm:grid-cols-2">
+        <div>
+          <label className="label">Full name</label>
+          <input className="input" value={name} onChange={(e) => setName(e.target.value)} placeholder="Aditi Sharma" />
+        </div>
+        <div>
+          <label className="label">Role</label>
+          <select className="input" value={role} onChange={(e) => setRole(e.target.value as typeof role)}>
+            <option value="member">Member</option>
+            <option value="admin">Admin</option>
+            <option value="guest">Guest</option>
+          </select>
+        </div>
+        <div>
+          <label className="label">Position</label>
+          <input className="input" value={position} onChange={(e) => setPosition(e.target.value)} placeholder="Support Executive" />
+        </div>
+        <div>
+          <label className="label">Department</label>
+          <input className="input" value={department} onChange={(e) => setDepartment(e.target.value)} placeholder="Customer Support" />
+        </div>
+      </div>
+
+      <label className="label mt-3">Reports to</label>
+      <select className="input" value={managerId} onChange={(e) => setManagerId(e.target.value)}>
+        <option value="">No manager</option>
+        {members.map((m) => <option key={m.userId} value={m.userId}>{m.user.name} — {m.user.position || m.role}</option>)}
+      </select>
+
+      {error && <p className="mt-3 rounded-xl bg-rose-50 px-3 py-2 text-[12px] font-semibold text-rose-700 dark:bg-rose-500/15 dark:text-rose-300">{error}</p>}
+    </Modal>
+  );
+}
+
+/* ------------------------------------------------------ hidden people */
+
+function HiddenPeopleModal({
+  open, onClose, hidden, onRestore,
+}: {
+  open: boolean;
+  onClose: () => void;
+  hidden: { targetUserId: string; user: { name: string; position?: string; avatarColor: string } }[];
+  onRestore: (userId: string) => Promise<void>;
+}) {
+  return (
+    <Modal open={open} onClose={onClose} title="Hidden people" subtitle="They still exist in the team — this only hides them from your list.">
+      {hidden.length === 0 ? (
+        <p className="py-8 text-center text-[12.5px] text-muted">Nobody is hidden.</p>
+      ) : (
+        <div className="space-y-1.5">
+          {hidden.map((h) => (
+            <div key={h.targetUserId} className="flex items-center gap-2.5 rounded-xl border px-2.5 py-2 bordered">
+              <Avatar name={h.user.name} color={h.user.avatarColor} size={30} />
+              <span className="min-w-0 flex-1">
+                <span className="block truncate text-[12.5px] font-semibold">{h.user.name}</span>
+                <span className="block truncate text-[10.5px] text-muted">{h.user.position || ''}</span>
+              </span>
+              <button type="button" className="btn-soft h-7 px-2.5 text-[11.5px]" onClick={() => void onRestore(h.targetUserId)}>
+                <Eye size={12} /> Restore
+              </button>
+            </div>
+          ))}
+        </div>
       )}
     </Modal>
   );

@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import {
   FolderOpen, Hash, Info, Lock, Pin, Plus, Search, StickyNote, Users, X, FileText, Download,
-  Trash2, Video, Check, Edit3, Sparkles,
+  Trash2, Video, Check, Edit3, Sparkles, Bell, BellOff, EyeOff, BarChart3,
 } from 'lucide-react';
 import { useApp } from '@/context/AppContext';
 import { api } from '@/lib/api';
@@ -13,6 +13,7 @@ import { MessageList } from '@/components/MessageList';
 import { Composer } from '@/components/Composer';
 import { RichText } from '@/components/RichText';
 import { PersonCard } from '@/components/PersonCard';
+import { PollCard, PollComposer } from '@/components/PollCard';
 
 type Tab = 'chat' | 'files' | 'notes';
 
@@ -21,7 +22,7 @@ export function ChannelPage() {
   const {
     channels, members, messages, user, typing, online, loadMessages, sendMessage, sendTyping,
     addChannelMembers, updateChannel, can, toast, createNote, updateNote, channelNotes, channelFiles,
-    createCall, team, dms,
+    createCall, team, dms, setChannelPrefs, polls, loadPolls, createPoll, votePoll, closePoll,
   } = useApp();
 
   const [tab, setTab] = useState<Tab>('chat');
@@ -34,6 +35,7 @@ export function ChannelPage() {
   const [callOpen, setCallOpen] = useState(false);
   const [callTitle, setCallTitle] = useState('');
   const [profileId, setProfileId] = useState<string | null>(null);
+  const [pollOpen, setPollOpen] = useState(false);
 
   const channel = channels.find((c) => c.id === channelId);
   const dmPartner = channel?.kind === 'dm' ? dms.find((d) => d.channel.id === channel.id)?.partner : undefined;
@@ -49,6 +51,7 @@ export function ChannelPage() {
     loadMessages(channelId)
       .catch((e) => toast({ title: 'Could not load messages', body: e.message, tone: 'error' }))
       .finally(() => setLoading(false));
+    void loadPolls(channelId);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [channelId]);
 
@@ -140,7 +143,30 @@ export function ChannelPage() {
               })}
               {channel.memberIds.length > 3 && <span className="pl-2 text-[11px] font-semibold text-muted">+{channel.memberIds.length - 3}</span>}
             </div>
-            <IconButton label="Start a meeting" onClick={() => { setCallTitle(`${channel.name} huddle`); setCallOpen(true); }}><Video size={16} /></IconButton>
+            <IconButton
+              label={channel.muted ? 'Unmute this conversation' : 'Mute this conversation'}
+              active={channel.muted}
+              onClick={async () => {
+                await setChannelPrefs(channelId, { muted: !channel.muted });
+                toast({
+                  title: channel.muted ? 'Notifications on' : 'Muted',
+                  body: channel.muted ? undefined : 'You will not get badges for this conversation.',
+                  tone: 'success',
+                });
+              }}
+            >
+              {channel.muted ? <BellOff size={16} /> : <Bell size={16} />}
+            </IconButton>
+            <IconButton
+              label="Hide this conversation"
+              onClick={async () => {
+                await setChannelPrefs(channelId, { hidden: true });
+                toast({ title: 'Hidden from your sidebar', body: 'Find it again under Hidden in People.', tone: 'success' });
+              }}
+            >
+              <EyeOff size={16} />
+            </IconButton>
+            <IconButton label="Start a meeting" onClick={() => { setCallTitle(`${displayName} huddle`); setCallOpen(true); }}><Video size={16} /></IconButton>
             <IconButton label="Add people" onClick={() => setAddPeopleOpen(true)}><Users size={16} /></IconButton>
             <IconButton label="Channel details" onClick={() => setDetailsOpen((v) => !v)} active={detailsOpen}><Info size={16} /></IconButton>
           </div>
@@ -165,6 +191,21 @@ export function ChannelPage() {
 
         {tab === 'chat' && (
           <>
+            {(polls[channelId]?.length || 0) > 0 && (
+              <div className="max-h-64 shrink-0 overflow-y-auto border-b px-2 py-2 sm:px-4 bordered">
+                <div className="mx-auto max-w-4xl space-y-1">
+                  {polls[channelId].map((p) => (
+                    <PollCard
+                      key={p.id}
+                      poll={p}
+                      canClose={p.createdBy?.id === user?.id || can('message.deleteAny')}
+                      onVote={(optionId) => votePoll(channelId, p.id, optionId)}
+                      onClose={() => closePoll(channelId, p.id)}
+                    />
+                  ))}
+                </div>
+              </div>
+            )}
             <div className="flex-1 overflow-hidden">
               {loading ? (
                 <div className="flex h-full items-center justify-center"><Spinner size={22} /></div>
@@ -195,6 +236,18 @@ export function ChannelPage() {
                       </span>
                       {typingHere.length === 1 ? `${typingHere[0].name} is typing…` : `${typingHere.length} people are typing…`}
                     </span>
+                  )}
+                </div>
+                <div className="mb-1.5 flex items-center gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() => setPollOpen(true)}
+                    className="inline-flex items-center gap-1 rounded-lg px-2 py-1 text-[11px] font-bold text-brand-600 transition hover:bg-brand-50 dark:text-brand-300 dark:hover:bg-brand-500/15"
+                  >
+                    <BarChart3 size={12} /> Poll
+                  </button>
+                  {(polls[channelId]?.length || 0) > 0 && (
+                    <span className="text-[10.5px] text-muted">{polls[channelId].length} active</span>
                   )}
                 </div>
                 <Composer
@@ -260,6 +313,15 @@ export function ChannelPage() {
       {thread && <ThreadPanel parent={thread} onClose={() => setThread(null)} members={members} />}
 
       <PersonCard userId={profileId} open={!!profileId} onClose={() => setProfileId(null)} />
+
+      <PollComposer
+        open={pollOpen}
+        onClose={() => setPollOpen(false)}
+        onCreate={async (input) => {
+          await createPoll(channelId, input);
+          toast({ title: 'Poll created', tone: 'success' });
+        }}
+      />
 
       <Modal
         open={addPeopleOpen}

@@ -29,6 +29,7 @@ export function publicUser(u) {
     status: u.status || 'offline',
     statusText: u.statusText || '',
     isBot: !!u.isBot,
+    outOfOffice: u.outOfOffice || null,
     createdAt: u.createdAt,
   };
 }

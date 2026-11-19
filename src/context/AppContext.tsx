@@ -4,8 +4,8 @@ import {
 import type { ReactNode } from 'react';
 import { api, tokenStore, wsUrl } from '@/lib/api';
 import type {
-  CallRow, Channel, DirectMessage, FileRow, Message, Membership, Note, NotificationRow,
-  PermissionDef, TaskItem, Team, User,
+  AddPersonResult, CallRow, Channel, DirectMessage, FileRow, HiddenPerson, Message,
+  Membership, Note, NotificationRow, OutOfOffice, PermissionDef, Poll, TaskItem, Team, User,
 } from '@/lib/types';
 
 type Toast = { id: string; title: string; body?: string; tone?: 'info' | 'success' | 'error' };
@@ -61,10 +61,25 @@ interface AppState {
 
   channelFiles: (channelId: string) => Promise<FileRow[]>;
 
-  createCall: (input: { title?: string; channelId?: string | null; scheduledAt?: string | null; inviteeIds?: string[] | null }) => Promise<CallRow>;
+  createCall: (input: {
+    title?: string; channelId?: string | null; scheduledAt?: string | null;
+    inviteeIds?: string[] | null; reminders?: number[] | null;
+    description?: string; sendEmail?: boolean;
+  }) => Promise<CallRow>;
   dms: DirectMessage[];
   openDm: (userId: string) => Promise<Channel>;
   refreshDms: () => Promise<void>;
+  addMember: (input: { email: string; name?: string; role?: string; position?: string; department?: string; managerId?: string | null; password?: string }) => Promise<AddPersonResult>;
+  setChannelPrefs: (channelId: string, input: { muted?: boolean; hidden?: boolean }) => Promise<void>;
+  hiddenPeople: HiddenPerson[];
+  hidePerson: (userId: string) => Promise<void>;
+  unhidePerson: (userId: string) => Promise<void>;
+  startGroupCall: (userIds: string[], title?: string) => Promise<CallRow>;
+  polls: Record<string, Poll[]>;
+  loadPolls: (channelId: string) => Promise<void>;
+  createPoll: (channelId: string, input: { question: string; options: string[]; allowMultiple?: boolean; anonymous?: boolean }) => Promise<Poll>;
+  votePoll: (channelId: string, pollId: string, optionId: string) => Promise<void>;
+  closePoll: (channelId: string, pollId: string) => Promise<void>;
   updateCall: (callId: string, input: { status?: string }) => Promise<void>;
 
   can: (permission: string) => boolean;
@@ -73,7 +88,7 @@ interface AppState {
   dismissToast: (id: string) => void;
   refreshNotifications: () => Promise<void>;
   markNotificationsRead: () => Promise<void>;
-  updateProfile: (input: Partial<Pick<User, 'name' | 'title' | 'status' | 'statusText'>>) => Promise<void>;
+  updateProfile: (input: Partial<Pick<User, 'name' | 'title' | 'status' | 'statusText'>> & { outOfOffice?: OutOfOffice | null }) => Promise<void>;
 }
 
 const Ctx = createContext<AppState | null>(null);
@@ -97,6 +112,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [myPermissions, setMyPermissions] = useState<string[]>([]);
   const [messages, setMessages] = useState<Record<string, Message[]>>({});
   const [dms, setDms] = useState<DirectMessage[]>([]);
+  const [hiddenPeople, setHiddenPeople] = useState<HiddenPerson[]>([]);
+  const [polls, setPolls] = useState<Record<string, Poll[]>>({});
   const [tasks, setTasks] = useState<TaskItem[]>([]);
   const [calls, setCalls] = useState<CallRow[]>([]);
   const [notifications, setNotifications] = useState<NotificationRow[]>([]);
@@ -153,7 +170,36 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setCalls(callRows);
     setTasks(taskRows);
     api.dms().then(({ dms: rows }) => setDms(rows)).catch(() => undefined);
+    api.hiddenPeople(target).then(({ hidden }) => setHiddenPeople(hidden)).catch(() => undefined);
   }, [teamId, team?.id]);
+
+  const addMember = useCallback(async (input: { email: string; name?: string; role?: string; position?: string; department?: string; managerId?: string | null; password?: string }) => {
+    if (!teamId) throw new Error('No team selected');
+    const result = await api.addMember(teamId, input);
+    await refreshTeam();
+    return result;
+  }, [teamId, refreshTeam]);
+
+  const setChannelPrefs = useCallback(async (channelId: string, input: { muted?: boolean; hidden?: boolean }) => {
+    const { channel } = await api.setChannelPrefs(channelId, input);
+    setChannels((prev) => prev.map((c) => (c.id === channel.id ? { ...c, ...channel } : c)));
+    setDms((prev) => prev.map((d) => (d.channel.id === channel.id ? { ...d, channel: { ...d.channel, ...channel } } : d)));
+  }, []);
+
+  const hidePerson = useCallback(async (userId: string) => {
+    if (!teamId) return;
+    await api.hidePerson(teamId, userId);
+    const { hidden } = await api.hiddenPeople(teamId);
+    setHiddenPeople(hidden);
+  }, [teamId]);
+
+  const unhidePerson = useCallback(async (userId: string) => {
+    if (!teamId) return;
+    await api.unhidePerson(teamId, userId);
+    const { hidden } = await api.hiddenPeople(teamId);
+    setHiddenPeople(hidden);
+  }, [teamId]);
+
 
   const refreshDms = useCallback(async () => {
     try {
@@ -322,6 +368,19 @@ export function AppProvider({ children }: { children: ReactNode }) {
           case 'task.deleted':
             setTasks((prev) => prev.filter((t) => t.id !== data.taskId));
             break;
+          case 'poll.created':
+          case 'poll.updated':
+            setPolls((prev) => {
+              const list = prev[data.channelId] || [];
+              const exists = list.some((p) => p.id === data.poll.id);
+              return {
+                ...prev,
+                [data.channelId]: exists
+                  ? list.map((p) => (p.id === data.poll.id ? data.poll : p))
+                  : [...list, data.poll],
+              };
+            });
+            break;
           case 'call.created':
             setCalls((prev) => (prev.some((c) => c.id === data.call.id) ? prev : [data.call, ...prev]));
             break;
@@ -453,6 +512,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setMessages({});
     setTasks([]);
     setDms([]);
+    setHiddenPeople([]);
     setCalls([]);
     setNotifications([]);
   }, []);
@@ -630,7 +690,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   /* ------------------------------------------------------------- meetings */
 
-  const createCall = useCallback(async (input: { title?: string; channelId?: string | null; scheduledAt?: string | null; inviteeIds?: string[] | null }) => {
+  const createCall = useCallback(async (input: {
+    title?: string; channelId?: string | null; scheduledAt?: string | null;
+    inviteeIds?: string[] | null; reminders?: number[] | null;
+    description?: string; sendEmail?: boolean;
+  }) => {
     if (!teamId) throw new Error('No team selected');
     const { call } = await api.createCall(teamId, input);
     setCalls((prev) => (prev.some((c) => c.id === call.id) ? prev : [call, ...prev]));
@@ -642,9 +706,44 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setCalls((prev) => prev.map((c) => (c.id === call.id ? { ...c, ...call } : c)));
   }, []);
 
+  // A group call is the same call object with several invitees; the server
+  // rings exactly those people instead of the whole team.
+  const startGroupCall = useCallback(async (userIds: string[], title?: string) => {
+    const call = await createCall({
+      title: title || `Group call · ${userIds.length + 1} people`,
+      inviteeIds: userIds,
+    });
+    return call;
+  }, [createCall]);
+
   /* -------------------------------------------------------------- profile */
 
-  const updateProfile = useCallback(async (input: Partial<Pick<User, 'name' | 'title' | 'status' | 'statusText'>>) => {
+  const loadPolls = useCallback(async (channelId: string) => {
+    try {
+      const { polls: rows } = await api.polls(channelId);
+      setPolls((prev) => ({ ...prev, [channelId]: rows }));
+    } catch {
+      /* non-fatal */
+    }
+  }, []);
+
+  const createPoll = useCallback(async (channelId: string, input: { question: string; options: string[]; allowMultiple?: boolean; anonymous?: boolean }) => {
+    const { poll } = await api.createPoll(channelId, input);
+    setPolls((prev) => ({ ...prev, [channelId]: [...(prev[channelId] || []), poll] }));
+    return poll;
+  }, []);
+
+  const votePoll = useCallback(async (channelId: string, pollId: string, optionId: string) => {
+    const { poll } = await api.votePoll(pollId, optionId);
+    setPolls((prev) => ({ ...prev, [channelId]: (prev[channelId] || []).map((p) => (p.id === poll.id ? poll : p)) }));
+  }, []);
+
+  const closePoll = useCallback(async (channelId: string, pollId: string) => {
+    const { poll } = await api.closePoll(pollId, true);
+    setPolls((prev) => ({ ...prev, [channelId]: (prev[channelId] || []).map((p) => (p.id === poll.id ? poll : p)) }));
+  }, []);
+
+  const updateProfile = useCallback(async (input: Partial<Pick<User, 'name' | 'title' | 'status' | 'statusText'>> & { outOfOffice?: OutOfOffice | null }) => {
     const { user: updated } = await api.updateMe(input);
     setUser(updated);
   }, []);
@@ -710,6 +809,17 @@ export function AppProvider({ children }: { children: ReactNode }) {
     dms,
     openDm,
     refreshDms,
+    addMember,
+    setChannelPrefs,
+    hiddenPeople,
+    hidePerson,
+    unhidePerson,
+    startGroupCall,
+    polls,
+    loadPolls,
+    createPoll,
+    votePoll,
+    closePoll,
     updateCall,
     can,
     toast,

@@ -1,5 +1,32 @@
 export type Role = 'owner' | 'admin' | 'member' | 'guest' | 'bot';
 
+export interface OutOfOffice {
+  enabled: boolean;
+  startDate: string | null;
+  endDate: string | null;
+  message: string;
+  delegateId: string | null;
+}
+
+export interface CalendarEvent {
+  id: string;
+  kind: 'meeting' | 'task' | 'ooo';
+  title: string;
+  at: string;
+  endAt?: string | null;
+  allDay: boolean;
+  status?: string;
+  link: string;
+  hostName?: string;
+  attendeeCount?: number;
+  description?: string;
+  assigneeName?: string;
+  priority?: string;
+  userId?: string;
+  message?: string;
+  delegateName?: string;
+}
+
 export interface User {
   id: string;
   name: string;
@@ -19,6 +46,7 @@ export interface User {
   status?: 'online' | 'away' | 'busy' | 'offline';
   statusText?: string;
   isBot?: boolean;
+  outOfOffice?: OutOfOffice | null;
   createdAt?: string;
 }
 
@@ -68,6 +96,8 @@ export interface Channel {
   archived: boolean;
   memberIds: string[];
   unread: number;
+  muted?: boolean;
+  hidden?: boolean;
   lastMessage: { body: string; createdAt: string; authorName: string } | null;
 }
 
@@ -161,6 +191,12 @@ export interface CallRow {
   endedAt?: string | null;
   createdAt: string;
   participants?: string[];
+  description?: string;
+  reminders?: number[];
+  remindersSent?: number[];
+  inviteeIds?: string[];
+  isDirect?: boolean;
+  breakout?: Breakout | null;
 }
 
 export interface NotificationRow {
@@ -211,6 +247,67 @@ export interface UserProfile {
   manager: User | null;
   reports: User[];
   teamRoles: { teamId: string; teamName: string; role: Role; joinedAt: string }[];
+}
+
+export interface PollOption {
+  id: string;
+  text: string;
+  count: number;
+  percent: number;
+  voters: string[];
+}
+
+export interface Poll {
+  id: string;
+  channelId: string;
+  teamId: string;
+  question: string;
+  options: PollOption[];
+  allowMultiple: boolean;
+  anonymous: boolean;
+  closesAt: string | null;
+  closed: boolean;
+  createdBy: User;
+  createdAt: string;
+  totalVotes: number;
+  votersCount: number;
+  myVotes: string[];
+}
+
+export interface BreakoutRoom {
+  id: string;
+  name: string;
+  userIds: string[];
+}
+
+export interface Breakout {
+  open: boolean;
+  rooms: BreakoutRoom[];
+  durationMinutes: number | null;
+  startedAt: string | null;
+  createdBy: string;
+}
+
+export interface MeetingInvite {
+  status: 'INVITED' | 'ACCEPTED' | 'DECLINED';
+  createdAt: string;
+}
+
+export interface HiddenPerson {
+  id: string;
+  userId: string;
+  teamId: string;
+  targetUserId: string;
+  createdAt: string;
+  user: User;
+}
+
+export interface AddPersonResult {
+  user: User;
+  role: Role;
+  created: boolean;
+  temporaryPassword: string | null;
+  alreadyMember: boolean;
 }
 
 export interface DirectMessage {

@@ -1,6 +1,7 @@
 import type {
-  CallRow, Channel, DirectMessage, FileRow, Hierarchy, InviteRow, Message, Note,
-  NotificationRow, SearchResults, TaskItem, Team, TeamBundle, TeamReport, User, UserProfile,
+  AddPersonResult, Breakout, CalendarEvent, CallRow, Channel, DirectMessage, FileRow,
+  HiddenPerson, Hierarchy, InviteRow, Message, Note, NotificationRow, OutOfOffice, Poll,
+  SearchResults, TaskItem, Team, TeamBundle, TeamReport, User, UserProfile,
 } from './types';
 
 const TOKEN_KEY = 'egan.pulse.token';
@@ -60,11 +61,25 @@ export const api = {
   register: (input: { name: string; email: string; password: string; title?: string }) =>
     post<{ token: string; user: User; teamId: string }>('/auth/register', input),
   me: () => get<{ user: User }>('/auth/me'),
-  updateMe: (input: Partial<Pick<User, 'name' | 'title' | 'status' | 'statusText' | 'avatarUrl'>>) =>
+  updateMe: (input: Partial<Pick<User, 'name' | 'title' | 'status' | 'statusText' | 'avatarUrl'>> & { outOfOffice?: OutOfOffice | null }) =>
     patch<{ user: User }>('/auth/me', input),
+  calendar: (teamId: string, range: { from?: string; to?: string } = {}) => {
+    const q = new URLSearchParams();
+    if (range.from) q.set('from', range.from);
+    if (range.to) q.set('to', range.to);
+    const s = q.toString();
+    return get<{ events: CalendarEvent[]; counts: { meeting: number; task: number; ooo: number } }>(`/teams/${teamId}/calendar${s ? `?${s}` : ''}`);
+  },
   users: () => get<{ users: User[] }>('/users'),
   profile: (userId: string) => get<UserProfile>(`/users/${userId}`),
   hierarchy: (teamId: string) => get<Hierarchy>(`/teams/${teamId}/hierarchy`),
+  addMember: (teamId: string, input: { email: string; name?: string; role?: string; position?: string; department?: string; managerId?: string | null; password?: string }) =>
+    post<AddPersonResult>(`/teams/${teamId}/members`, input),
+  setChannelPrefs: (channelId: string, input: { muted?: boolean; hidden?: boolean }) =>
+    patch<{ channel: Channel }>(`/channels/${channelId}/prefs`, input),
+  hiddenPeople: (teamId: string) => get<{ hidden: HiddenPerson[] }>(`/hidden-people?teamId=${encodeURIComponent(teamId)}`),
+  hidePerson: (teamId: string, userId: string) => post<{ ok: true; hidden: boolean }>(`/teams/${teamId}/people/${userId}/hide`),
+  unhidePerson: (teamId: string, userId: string) => del<{ ok: true; hidden: boolean }>(`/teams/${teamId}/people/${userId}/hide`),
   dms: () => get<{ dms: DirectMessage[] }>('/dms'),
   openDm: (userId: string) => post<{ channel: Channel; partner: User; created: boolean }>(`/dms/${userId}`),
   reports: (teamId: string) => get<TeamReport>(`/teams/${teamId}/reports`),
@@ -160,8 +175,30 @@ export const api = {
 
   // meetings
   calls: (teamId: string) => get<{ calls: CallRow[] }>(`/teams/${teamId}/calls`),
-  createCall: (teamId: string, input: { title?: string; channelId?: string | null; scheduledAt?: string | null; inviteeIds?: string[] | null }) =>
-    post<{ call: CallRow }>(`/teams/${teamId}/calls`, input),
+  createCall: (teamId: string, input: {
+    title?: string; channelId?: string | null; scheduledAt?: string | null;
+    inviteeIds?: string[] | null; reminders?: number[] | null;
+    description?: string; sendEmail?: boolean;
+  }) =>
+    post<{ call: CallRow; emailResult?: { attempted: number; delivered: number; reason: string | null } | null }>(`/teams/${teamId}/calls`, input),
+
+  // polls
+  polls: (channelId: string) => get<{ polls: Poll[] }>(`/channels/${channelId}/polls`),
+  createPoll: (channelId: string, input: { question: string; options: string[]; allowMultiple?: boolean; anonymous?: boolean; closesAt?: string | null }) =>
+    post<{ poll: Poll }>(`/channels/${channelId}/polls`, input),
+  votePoll: (pollId: string, optionId: string) => post<{ poll: Poll }>(`/polls/${pollId}/vote`, { optionId }),
+  closePoll: (pollId: string, closed: boolean) => patch<{ poll: Poll }>(`/polls/${pollId}`, { closed }),
+
+  // breakout rooms
+  setBreakout: (callId: string, input: { rooms: { id?: string; name: string; userIds: string[] }[]; open?: boolean; durationMinutes?: number | null }) =>
+    post<{ breakout: Breakout }>(`/calls/${callId}/breakout`, input),
+  closeBreakout: (callId: string) => del<{ breakout: null }>(`/calls/${callId}/breakout`),
+
+  // meeting invites (emailed links)
+  meetingInvite: (token: string) =>
+    get<{ invite: { status: string; createdAt: string }; call: { id: string; title: string; description: string; scheduledAt: string | null; status: string; hostName: string } | null; person: { name: string; email: string } | null }>(`/meeting-invites/${token}`),
+  respondMeetingInvite: (token: string, action: 'accept' | 'decline') =>
+    post<{ status: string }>(`/meeting-invites/${token}/${action}`),
   call: (callId: string) => get<{ call: CallRow; team: Team }>(`/calls/${callId}`),
   updateCall: (callId: string, input: { status?: string }) => patch<{ call: CallRow }>(`/calls/${callId}`, input),
 

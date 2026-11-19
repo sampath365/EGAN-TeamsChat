@@ -98,6 +98,11 @@ function channelView(ch, userId) {
   const last = messages[messages.length - 1];
   const readRow = db.readState.find((r) => r.channelId === ch.id && r.userId === userId);
   const lastReadAt = readRow ? readRow.lastReadAt : null;
+  const prefs = db.channelPrefs.find((r) => r.channelId === ch.id && r.userId === userId);
+  const muted = !!prefs?.muted;
+  const hidden = !!prefs?.hidden;
+  // A muted conversation still counts unread (the row is not lost), but the
+  // client suppresses the badge and notifications — that is the point of mute.
   const unread = messages.filter(
     (m) => m.authorId !== userId && (!lastReadAt || m.createdAt > lastReadAt),
   ).length;
@@ -105,6 +110,8 @@ function channelView(ch, userId) {
     ...ch,
     memberIds: channelMemberIds(ch.id),
     unread,
+    muted,
+    hidden,
     lastMessage: last
       ? { body: last.body.slice(0, 140), createdAt: last.createdAt, authorName: db.users.find((u) => u.id === last.authorId)?.name || '' }
       : null,
@@ -202,12 +209,35 @@ app.get('/api/auth/me', authRequired, wrap(async (req, res) => {
 }));
 
 app.patch('/api/auth/me', authRequired, wrap(async (req, res) => {
-  const { name, title, status, statusText, avatarUrl } = req.body || {};
+  const { name, title, status, statusText, avatarUrl, outOfOffice } = req.body || {};
   if (typeof name === 'string' && name.trim()) req.user.name = name.trim();
   if (typeof title === 'string') req.user.title = title;
   if (typeof status === 'string') req.user.status = status;
   if (typeof statusText === 'string') req.user.statusText = statusText;
   if (typeof avatarUrl === 'string') req.user.avatarUrl = avatarUrl || null;
+
+  if (outOfOffice !== undefined) {
+    if (outOfOffice === null) {
+      req.user.outOfOffice = null;
+    } else if (typeof outOfOffice === 'object') {
+      const startDate = outOfOffice.startDate ? String(outOfOffice.startDate) : null;
+      const endDate = outOfOffice.endDate ? String(outOfOffice.endDate) : null;
+      if (startDate && endDate && endDate < startDate) {
+        throw fail(400, 'The out-of-office end date cannot be before the start date.');
+      }
+      const delegateId = outOfOffice.delegateId || null;
+      if (delegateId && !db.users.some((u) => u.id === delegateId)) {
+        throw fail(400, 'That delegate does not exist.');
+      }
+      req.user.outOfOffice = {
+        enabled: !!outOfOffice.enabled,
+        startDate,
+        endDate,
+        message: String(outOfOffice.message || ''),
+        delegateId,
+      };
+    }
+  }
   persist();
   broadcastToUsers([...new Set(db.memberships.filter((m) => db.teams.some((t) => t.id === m.teamId)).map((m) => m.userId))], {
     type: 'user.updated', user: publicUser(req.user),
@@ -533,6 +563,156 @@ app.delete('/api/teams/:teamId/members/:userId', authRequired, wrap(async (req, 
   persist();
   broadcastToUsers([userId], { type: 'team.removed', teamId });
   res.json({ ok: true });
+}));
+
+/* ------------------------------------------------- add people & preferences */
+
+// Add a person straight to the team, without an invite link. If the email
+// already belongs to an account we add that account; otherwise we create one
+// with a starter password the operator can pass on.
+app.post('/api/teams/:teamId/members', authRequired, wrap(async (req, res) => {
+  const team = db.teams.find((t) => t.id === req.params.teamId);
+  if (!team) throw fail(404, 'Team not found.');
+  requireMember(team.id, req.user.id);
+  requirePermission(team.id, req.user.id, 'member.invite');
+
+  const {
+    email, name = '', role = 'member', position = '', department = '', managerId = null, password,
+  } = req.body || {};
+  const cleanEmail = String(email || '').trim().toLowerCase();
+  if (!cleanEmail || !cleanEmail.includes('@')) throw fail(400, 'A valid email address is required.');
+  if (!['member', 'admin', 'guest'].includes(role)) throw fail(400, 'Pick member, admin or guest.');
+
+  let target = db.users.find((u) => u.email.toLowerCase() === cleanEmail);
+  let created = false;
+  let temporaryPassword = null;
+
+  if (!target) {
+    const pw = String(password || '').trim() || crypto.randomBytes(6).toString('base64url');
+    target = {
+      id: id('u'),
+      name: String(name || cleanEmail.split('@')[0]).trim(),
+      email: cleanEmail,
+      title: position || '',
+      position: position || '',
+      department: department || '',
+      employeeId: '',
+      managerId: managerId || null,
+      phone: '',
+      location: '',
+      timezone: '',
+      bio: '',
+      joinedAt: now(),
+      avatarColor: pickColor(cleanEmail),
+      avatarUrl: null,
+      passwordHash: hashPassword(pw),
+      status: 'offline',
+      statusText: '',
+      isBot: false,
+      createdAt: now(),
+    };
+    db.users.push(target);
+    db.presence.push({ id: id('p'), userId: target.id, status: 'offline', lastSeen: now() });
+    created = true;
+    temporaryPassword = pw;
+  } else {
+    // Existing account: fill in any org detail the operator supplied.
+    if (position) { target.position = position; target.title = position; }
+    if (department) target.department = department;
+    if (managerId) target.managerId = managerId;
+  }
+
+  const existing = membershipFor(team.id, target.id);
+  if (existing) {
+    existing.role = role;
+  } else {
+    db.memberships.push({
+      id: id('m'), teamId: team.id, userId: target.id, role, joinedAt: now(), permissions: [],
+    });
+  }
+
+  // Give them the team's public channels so the app is not empty on first load.
+  for (const ch of db.channels.filter((c) => c.teamId === team.id && !c.isPrivate && !c.archived)) {
+    if (!db.channelMembers.some((cm) => cm.channelId === ch.id && cm.userId === target.id)) {
+      db.channelMembers.push({ id: id('cm'), channelId: ch.id, userId: target.id });
+    }
+  }
+
+  persist();
+  if (!existing) {
+    notify(target.id, {
+      kind: 'member',
+      title: `${req.user.name} added you to ${team.name}`,
+      body: `You joined as ${role}.`,
+      link: `#/team/${team.id}`,
+    });
+  }
+  broadcastToUsers(
+    db.memberships.filter((m) => m.teamId === team.id).map((m) => m.userId),
+    { type: 'member.added', teamId: team.id, user: publicUser(target) },
+  );
+
+  res.json({
+    user: publicUser(target),
+    role,
+    created,
+    temporaryPassword,
+    alreadyMember: !!existing,
+  });
+}));
+
+// Per-conversation preferences: mute (stop badges/notifications) and hide
+// (take it out of the sidebar without leaving the conversation).
+app.patch('/api/channels/:channelId/prefs', authRequired, wrap(async (req, res) => {
+  const ch = channelAccessible(req.params.channelId, req.user.id);
+  if (!ch) throw fail(404, 'Channel not found.');
+
+  const { muted, hidden } = req.body || {};
+  let row = db.channelPrefs.find((r) => r.channelId === ch.id && r.userId === req.user.id);
+  if (!row) {
+    row = { id: id('cp'), channelId: ch.id, userId: req.user.id, muted: false, hidden: false };
+    db.channelPrefs.push(row);
+  }
+  if (typeof muted === 'boolean') row.muted = muted;
+  if (typeof hidden === 'boolean') row.hidden = hidden;
+  persist();
+
+  res.json({ channel: channelView(ch, req.user.id) });
+}));
+
+// Hide / unhide a person in the People list. This is a personal view
+// preference, never an access change: a hidden person keeps their membership,
+// their messages and their permissions.
+app.get('/api/hidden-people', authRequired, wrap(async (req, res) => {
+  const teamId = String(req.query.teamId || '');
+  const rows = db.hiddenPeople
+    .filter((h) => h.userId === req.user.id && (!teamId || h.teamId === teamId))
+    .map((h) => ({ ...h, user: publicUser(db.users.find((u) => u.id === h.targetUserId)) }));
+  res.json({ hidden: rows });
+}));
+
+app.post('/api/teams/:teamId/people/:userId/hide', authRequired, wrap(async (req, res) => {
+  const { teamId, userId } = req.params;
+  requireMember(teamId, req.user.id);
+  if (userId === req.user.id) throw fail(400, 'You cannot hide yourself.');
+  const target = db.users.find((u) => u.id === userId);
+  if (!target) throw fail(404, 'That person no longer exists.');
+
+  if (!db.hiddenPeople.some((h) => h.userId === req.user.id && h.teamId === teamId && h.targetUserId === userId)) {
+    db.hiddenPeople.push({ id: id('hp'), userId: req.user.id, teamId, targetUserId: userId, createdAt: now() });
+    persist();
+  }
+  res.json({ ok: true, hidden: true });
+}));
+
+app.delete('/api/teams/:teamId/people/:userId/hide', authRequired, wrap(async (req, res) => {
+  const { teamId, userId } = req.params;
+  requireMember(teamId, req.user.id);
+  db.hiddenPeople = db.hiddenPeople.filter(
+    (h) => !(h.userId === req.user.id && h.teamId === teamId && h.targetUserId === userId),
+  );
+  persist();
+  res.json({ ok: true, hidden: false });
 }));
 
 /* ----------------------------------------------------------------- invites */
@@ -901,6 +1081,350 @@ app.delete('/api/tasks/:taskId', authRequired, wrap(async (req, res) => {
   res.json({ ok: true });
 }));
 
+/* ------------------------------------------- meeting email invites & reminders */
+
+// Sends a meeting invite to each invitee and records an accept token. When no
+// SMTP is configured we still create the tokens and log the mail, so the
+// accept flow is testable without a mail server — the result says which
+// happened rather than pretending delivery succeeded.
+async function sendMeetingInvites(call, inviteeIds) {
+  const team = db.teams.find((t) => t.id === call.teamId);
+  const host = db.users.find((u) => u.id === call.hostId);
+  const when = call.scheduledAt ? new Date(call.scheduledAt) : new Date();
+  const results = [];
+
+  for (const uid of inviteeIds) {
+    const person = db.users.find((u) => u.id === uid);
+    if (!person?.email) {
+      results.push({ userId: uid, sent: false, reason: 'no email address' });
+      continue;
+    }
+
+    const token = crypto.randomBytes(12).toString('hex');
+    db.meetingInvites.push({
+      id: id('mi'),
+      callId: call.id,
+      userId: uid,
+      token,
+      status: 'INVITED',
+      createdAt: now(),
+      respondedAt: null,
+    });
+
+    const acceptUrl = `${process.env.PUBLIC_APP_URL || ''}/#/invite/${token}`;
+    const subject = `Invitation: ${call.title}`;
+    const body = [
+      `${host?.name || 'Someone'} invited you to “${call.title}”.`,
+      '',
+      `When: ${when.toLocaleString()}`,
+      call.description ? `About: ${call.description}` : '',
+      '',
+      `Accept: ${acceptUrl}`,
+      '',
+      '— EGAN Pulse',
+    ].filter(Boolean).join('\n');
+
+    const sent = await trySendMail(person.email, subject, body);
+    results.push({ userId: uid, email: person.email, sent: sent.sent, reason: sent.reason || null, acceptUrl });
+  }
+
+  persist();
+  const delivered = results.filter((r) => r.sent).length;
+  return {
+    attempted: results.length,
+    delivered,
+    reason: delivered === 0 && results.length > 0 ? results[0].reason : null,
+    results,
+  };
+}
+
+// Real SMTP if it is configured; otherwise record the intent and say so.
+async function trySendMail(to, subject, text) {
+  const host = process.env.SMTP_HOST;
+  const user = process.env.SMTP_USER;
+  const pass = process.env.SMTP_PASS;
+  if (!host || !user || !pass) {
+    console.log(`[pulse] email (not configured) -> ${to}: ${subject}`);
+    return { sent: false, reason: 'SMTP is not configured on this server' };
+  }
+  try {
+    const nodemailer = await import('nodemailer');
+    const transport = nodemailer.default.createTransport({
+      host,
+      port: Number(process.env.SMTP_PORT || 587),
+      secure: String(process.env.SMTP_SECURE || '') === 'true',
+      auth: { user, pass },
+    });
+    await transport.sendMail({
+      from: process.env.SMTP_FROM || user,
+      to,
+      subject,
+      text,
+    });
+    return { sent: true };
+  } catch (e) {
+    console.log(`[pulse] email failed -> ${to}: ${e.message}`);
+    return { sent: false, reason: e.message };
+  }
+}
+
+// Accept / decline a meeting from the emailed link.
+app.get('/api/meeting-invites/:token', wrap(async (req, res) => {
+  const invite = db.meetingInvites.find((i) => i.token === req.params.token);
+  if (!invite) throw fail(404, 'This invite link is not valid.');
+  const call = db.calls.find((c) => c.id === invite.callId);
+  const person = db.users.find((u) => u.id === invite.userId);
+  const host = call ? db.users.find((u) => u.id === call.hostId) : null;
+  res.json({
+    invite: { status: invite.status, createdAt: invite.createdAt },
+    call: call
+      ? {
+        id: call.id,
+        title: call.title,
+        description: call.description || '',
+        scheduledAt: call.scheduledAt,
+        status: call.status,
+        hostName: host?.name || '',
+      }
+      : null,
+    person: person ? { name: person.name, email: person.email } : null,
+  });
+}));
+
+app.post('/api/meeting-invites/:token/:action', wrap(async (req, res) => {
+  const invite = db.meetingInvites.find((i) => i.token === req.params.token);
+  if (!invite) throw fail(404, 'This invite link is not valid.');
+  const action = req.params.action;
+  if (!['accept', 'decline'].includes(action)) throw fail(400, 'Unknown action.');
+
+  invite.status = action === 'accept' ? 'ACCEPTED' : 'DECLINED';
+  invite.respondedAt = now();
+  persist();
+
+  const call = db.calls.find((c) => c.id === invite.callId);
+  const person = db.users.find((u) => u.id === invite.userId);
+  if (call) {
+    call.participants = call.participants || [];
+    if (action === 'accept' && !call.participants.includes(invite.userId)) {
+      call.participants.push(invite.userId);
+    }
+    notify(call.hostId, {
+      kind: 'meeting',
+      title: `${person?.name || 'Someone'} ${action === 'accept' ? 'accepted' : 'declined'} “${call.title}”`,
+      body: action === 'accept' ? 'They are on the guest list.' : 'They cannot attend.',
+      link: `#/meeting/${call.id}`,
+    });
+  }
+  res.json({ status: invite.status });
+}));
+
+/* --------------------------------------------------------------- calendar */
+
+// Everything that belongs on a calendar for a team in one read: meetings, task
+// due dates and people's out-of-office ranges. The client renders a month grid
+// from these entries, so no date arithmetic is duplicated on the server.
+app.get('/api/teams/:teamId/calendar', authRequired, wrap(async (req, res) => {
+  const team = db.teams.find((t) => t.id === req.params.teamId);
+  if (!team) throw fail(404, 'Team not found.');
+  requireMember(team.id, req.user.id);
+
+  const from = req.query.from ? new Date(String(req.query.from)) : null;
+  const to = req.query.to ? new Date(String(req.query.to)) : null;
+  const inRange = (iso) => {
+    if (!iso) return true;
+    const t = new Date(iso).getTime();
+    if (!Number.isFinite(t)) return true;
+    if (from && t < from.getTime()) return false;
+    if (to && t > to.getTime()) return false;
+    return true;
+  };
+
+  const events = [];
+
+  for (const call of db.calls.filter((c) => c.teamId === team.id)) {
+    const at = call.scheduledAt || call.startedAt || call.createdAt;
+    if (!inRange(at)) continue;
+    events.push({
+      id: call.id,
+      kind: 'meeting',
+      title: call.title,
+      at,
+      allDay: false,
+      status: call.status,
+      link: `#/meeting/${call.id}`,
+      hostName: db.users.find((u) => u.id === call.hostId)?.name || '',
+      attendeeCount: (call.inviteeIds || []).length,
+      description: call.description || '',
+    });
+  }
+
+  for (const task of db.tasks.filter((t) => t.teamId === team.id && t.dueDate)) {
+    const at = `${task.dueDate}T17:00:00.000Z`;
+    if (!inRange(at)) continue;
+    events.push({
+      id: task.id,
+      kind: 'task',
+      title: task.title,
+      at,
+      allDay: true,
+      status: task.status,
+      priority: task.priority,
+      link: '#/tasks',
+      assigneeName: db.users.find((u) => u.id === task.assigneeId)?.name || 'Unassigned',
+    });
+  }
+
+  const memberIds = new Set(db.memberships.filter((m) => m.teamId === team.id).map((m) => m.userId));
+  for (const u of db.users) {
+    if (!memberIds.has(u.id)) continue;
+    const ooo = u.outOfOffice;
+    if (!ooo?.enabled || !ooo.startDate) continue;
+    const at = `${ooo.startDate}T00:00:00.000Z`;
+    if (!inRange(at)) continue;
+    events.push({
+      id: `ooo-${u.id}`,
+      kind: 'ooo',
+      title: `${u.name} is out of office`,
+      at,
+      endAt: ooo.endDate ? `${ooo.endDate}T23:59:59.000Z` : null,
+      allDay: true,
+      userId: u.id,
+      link: `#/profile/${u.id}`,
+      message: ooo.message || '',
+      delegateName: ooo.delegateId ? db.users.find((x) => x.id === ooo.delegateId)?.name || '' : '',
+    });
+  }
+
+  events.sort((a, b) => a.at.localeCompare(b.at));
+  res.json({
+    team: teamView(team, req.user.id),
+    events,
+    counts: {
+      meeting: events.filter((e) => e.kind === 'meeting').length,
+      task: events.filter((e) => e.kind === 'task').length,
+      ooo: events.filter((e) => e.kind === 'ooo').length,
+    },
+  });
+}));
+
+/* ------------------------------------------------------------------ polls */
+
+function pollView(poll, userId) {
+  const votes = db.pollVotes.filter((v) => v.pollId === poll.id);
+  const totalVotes = votes.length;
+  const myVotes = votes.filter((v) => v.userId === userId).map((v) => v.optionId);
+  const options = poll.options.map((o) => {
+    const count = votes.filter((v) => v.optionId === o.id).length;
+    return {
+      id: o.id,
+      text: o.text,
+      count,
+      percent: totalVotes === 0 ? 0 : Math.round((count / totalVotes) * 100),
+      voters: poll.anonymous ? [] : votes.filter((v) => v.optionId === o.id).map((v) => v.userId),
+    };
+  });
+  return {
+    ...poll,
+    options,
+    totalVotes,
+    myVotes,
+    votersCount: new Set(votes.map((v) => v.userId)).size,
+    createdBy: publicUser(db.users.find((u) => u.id === poll.createdBy)),
+  };
+}
+
+app.get('/api/channels/:channelId/polls', authRequired, wrap(async (req, res) => {
+  const ch = channelAccessible(req.params.channelId, req.user.id);
+  if (!ch) throw fail(404, 'Channel not found.');
+  const rows = db.polls
+    .filter((p) => p.channelId === ch.id)
+    .map((p) => pollView(p, req.user.id));
+  res.json({ polls: rows });
+}));
+
+app.post('/api/channels/:channelId/polls', authRequired, wrap(async (req, res) => {
+  const ch = channelAccessible(req.params.channelId, req.user.id);
+  if (!ch) throw fail(404, 'Channel not found.');
+  const { question, options = [], allowMultiple = false, anonymous = false, closesAt = null } = req.body || {};
+  if (!String(question || '').trim()) throw fail(400, 'A poll needs a question.');
+  const texts = (Array.isArray(options) ? options : [])
+    .map((o) => (typeof o === 'string' ? o : o?.text) || '')
+    .map((t) => t.trim())
+    .filter(Boolean);
+  if (texts.length < 2) throw fail(400, 'A poll needs at least two options.');
+  if (texts.length > 10) throw fail(400, 'A poll can have at most ten options.');
+
+  const poll = {
+    id: id('poll'),
+    channelId: ch.id,
+    teamId: ch.teamId,
+    question: String(question).trim(),
+    options: texts.map((t) => ({ id: id('opt'), text: t })),
+    allowMultiple: !!allowMultiple,
+    anonymous: !!anonymous,
+    closesAt: closesAt || null,
+    closed: false,
+    createdBy: req.user.id,
+    createdAt: now(),
+  };
+  db.polls.push(poll);
+  persist();
+
+  const view = pollView(poll, req.user.id);
+  broadcastToUsers(channelMemberIds(ch.id), { type: 'poll.created', channelId: ch.id, poll: view });
+  res.json({ poll: view });
+}));
+
+app.post('/api/polls/:pollId/vote', authRequired, wrap(async (req, res) => {
+  const poll = db.polls.find((p) => p.id === req.params.pollId);
+  if (!poll) throw fail(404, 'Poll not found.');
+  const ch = channelAccessible(poll.channelId, req.user.id);
+  if (!ch) throw fail(404, 'Channel not found.');
+  if (poll.closed) throw fail(400, 'This poll is closed.');
+  if (poll.closesAt && new Date(poll.closesAt).getTime() < Date.now()) throw fail(400, 'This poll has closed.');
+
+  const { optionId } = req.body || {};
+  const option = poll.options.find((o) => o.id === optionId);
+  if (!option) throw fail(400, 'That option is not in this poll.');
+
+  const already = db.pollVotes.find(
+    (v) => v.pollId === poll.id && v.userId === req.user.id && v.optionId === optionId,
+  );
+
+  if (already) {
+    // Clicking your own choice again clears it — the usual way to undo a vote.
+    db.pollVotes = db.pollVotes.filter((v) => v.id !== already.id);
+  } else {
+    if (!poll.allowMultiple) {
+      // Single choice: a new pick replaces the old one.
+      db.pollVotes = db.pollVotes.filter((v) => !(v.pollId === poll.id && v.userId === req.user.id));
+    }
+    db.pollVotes.push({
+      id: id('pv'), pollId: poll.id, optionId, userId: req.user.id, createdAt: now(),
+    });
+  }
+  persist();
+
+  const view = pollView(poll, req.user.id);
+  broadcastToUsers(channelMemberIds(ch.id), { type: 'poll.updated', channelId: ch.id, poll: view });
+  res.json({ poll: view });
+}));
+
+app.patch('/api/polls/:pollId', authRequired, wrap(async (req, res) => {
+  const poll = db.polls.find((p) => p.id === req.params.pollId);
+  if (!poll) throw fail(404, 'Poll not found.');
+  const ch = channelAccessible(poll.channelId, req.user.id);
+  if (!ch) throw fail(404, 'Channel not found.');
+  if (poll.createdBy !== req.user.id && !can(ch.teamId, req.user.id, 'message.deleteAny')) {
+    throw fail(403, 'Only the poll creator can close it.');
+  }
+  if (typeof req.body?.closed === 'boolean') poll.closed = req.body.closed;
+  persist();
+  const view = pollView(poll, req.user.id);
+  broadcastToUsers(channelMemberIds(ch.id), { type: 'poll.updated', channelId: ch.id, poll: view });
+  res.json({ poll: view });
+}));
+
 /* ---------------------------------------------------------------- reports */
 
 // A team-level activity report. Deliberately computed from the rows we already
@@ -1077,6 +1601,7 @@ app.post('/api/teams/:teamId/calls', authRequired, wrap(async (req, res) => {
   requirePermission(req.params.teamId, req.user.id, 'meeting.host');
   const {
     title = 'Instant meeting', channelId = null, scheduledAt = null, inviteeIds = null,
+    reminders = null, description = '', sendEmail = false,
   } = req.body || {};
 
   // A 1:1 call passes inviteeIds; a channel/team meeting passes none and rings
@@ -1101,6 +1626,13 @@ app.post('/api/teams/:teamId/calls', authRequired, wrap(async (req, res) => {
     participants: [],
     inviteeIds: invitees,
     isDirect,
+    description: String(description || ''),
+    // Reminders are minutes-before-start offsets, e.g. [10, 1] = 10 min and
+    // 1 min before. Empty means no reminders.
+    reminders: Array.isArray(reminders)
+      ? reminders.map((n) => Number(n)).filter((n) => Number.isFinite(n) && n >= 0).slice(0, 5)
+      : [],
+    remindersSent: [],
   };
   db.calls.push(call);
   persist();
@@ -1114,7 +1646,76 @@ app.post('/api/teams/:teamId/calls', authRequired, wrap(async (req, res) => {
       link: `#/meeting/${call.id}`,
     });
   }
-  res.json({ call });
+  // Email invites are best-effort: the meeting is already created, so a mail
+  // failure must never fail the request. The reason is reported instead.
+  let emailResult = null;
+  if (sendEmail && invitees.length > 0) {
+    emailResult = await sendMeetingInvites(call, invitees);
+  }
+
+  res.json({ call, emailResult });
+}));
+
+// Breakout rooms: split the room into named groups. Assignment is advisory —
+// the client moves a peer's media by re-signalling, the server just keeps the
+// roster so everyone sees the same rooms.
+app.post('/api/calls/:callId/breakout', authRequired, wrap(async (req, res) => {
+  const call = db.calls.find((c) => c.id === req.params.callId);
+  if (!call) throw fail(404, 'Meeting not found.');
+  requireMember(call.teamId, req.user.id);
+  if (call.hostId !== req.user.id && !can(call.teamId, req.user.id, 'meeting.moderate')) {
+    throw fail(403, 'Only the host can manage breakout rooms.');
+  }
+
+  const { rooms = [], open = true, durationMinutes = null } = req.body || {};
+  if (!Array.isArray(rooms)) throw fail(400, 'rooms must be an array.');
+
+  const clean = rooms
+    .map((r, i) => ({
+      id: r.id || id('room'),
+      name: String(r.name || `Room ${i + 1}`).trim(),
+      userIds: Array.isArray(r.userIds) ? r.userIds.filter((u) => typeof u === 'string') : [],
+    }))
+    .filter((r) => r.name)
+    .slice(0, 12);
+
+  call.breakout = {
+    open: !!open,
+    rooms: clean,
+    durationMinutes: durationMinutes ? Number(durationMinutes) : null,
+    startedAt: open ? now() : null,
+    createdBy: req.user.id,
+  };
+  persist();
+
+  const memberIds = db.memberships.filter((m) => m.teamId === call.teamId).map((m) => m.userId);
+  broadcastToUsers(memberIds, { type: 'call.breakout', callId: call.id, breakout: call.breakout });
+  if (open) {
+    for (const uid of memberIds) {
+      if (uid === req.user.id) continue;
+      notify(uid, {
+        kind: 'meeting',
+        title: `${req.user.name} opened breakout rooms`,
+        body: `${clean.length} rooms in “${call.title}”.`,
+        link: `#/meeting/${call.id}`,
+      });
+    }
+  }
+  res.json({ breakout: call.breakout });
+}));
+
+app.delete('/api/calls/:callId/breakout', authRequired, wrap(async (req, res) => {
+  const call = db.calls.find((c) => c.id === req.params.callId);
+  if (!call) throw fail(404, 'Meeting not found.');
+  requireMember(call.teamId, req.user.id);
+  if (call.hostId !== req.user.id && !can(call.teamId, req.user.id, 'meeting.moderate')) {
+    throw fail(403, 'Only the host can close breakout rooms.');
+  }
+  call.breakout = null;
+  persist();
+  const memberIds = db.memberships.filter((m) => m.teamId === call.teamId).map((m) => m.userId);
+  broadcastToUsers(memberIds, { type: 'call.breakout', callId: call.id, breakout: null });
+  res.json({ breakout: null });
 }));
 
 app.get('/api/calls/:callId', authRequired, wrap(async (req, res) => {
@@ -1377,6 +1978,46 @@ function handleSocketMessage(ws, user, msg) {
 }
 
 seedDemo();
+
+// Reminder tick. Runs once a minute: a scheduled meeting whose reminder offset
+// has been reached sends an in-app notification plus a WebSocket push, exactly
+// once per offset. In-process on purpose — a single API instance, and a
+// missed tick while the process is down simply fires late rather than never.
+function reminderTick() {
+  const nowMs = Date.now();
+  let changed = false;
+
+  for (const call of db.calls) {
+    if (call.status !== 'scheduled' || !call.scheduledAt || !Array.isArray(call.reminders)) continue;
+    const startMs = new Date(call.scheduledAt).getTime();
+    if (!Number.isFinite(startMs)) continue;
+
+    call.remindersSent = call.remindersSent || [];
+    for (const offset of call.reminders) {
+      if (call.remindersSent.includes(offset)) continue;
+      const fireAt = startMs - offset * 60000;
+      if (nowMs < fireAt) continue;
+
+      call.remindersSent.push(offset);
+      changed = true;
+
+      const targets = new Set([call.hostId, ...(call.inviteeIds || [])]);
+      for (const uid of targets) {
+        const label = offset === 0 ? 'now' : `in ${offset} minute${offset === 1 ? '' : 's'}`;
+        notify(uid, {
+          kind: 'meeting',
+          title: `“${call.title}” starts ${label}`,
+          body: call.scheduledAt ? new Date(call.scheduledAt).toLocaleString() : '',
+          link: `#/meeting/${call.id}`,
+        });
+      }
+    }
+  }
+  if (changed) persist();
+}
+
+setInterval(reminderTick, 60000).unref?.();
+setTimeout(reminderTick, 3000).unref?.();
 
 server.listen(PORT, () => {
   console.log(`\n  EGAN Pulse API  →  http://localhost:${PORT}`);

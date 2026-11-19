@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import {
-  Copy, Hand, Mic, MicOff, Monitor, MonitorOff, PhoneOff, Send, Settings2, Users, Video, VideoOff, X, Maximize2, Grid2x2, ShieldCheck,
+  Copy, Hand, Mic, MicOff, Monitor, MonitorOff, PhoneOff, Send, Settings2, Users, Video, VideoOff,
+  X, Maximize2, Grid2x2, ShieldCheck, SplitSquareHorizontal, Shuffle, Timer, DoorOpen,
 } from 'lucide-react';
 import { useApp } from '@/context/AppContext';
 import { api, tokenStore, wsUrl } from '@/lib/api';
@@ -47,6 +48,11 @@ export function MeetingPage() {
   const [chatDraft, setChatDraft] = useState('');
   const [elapsed, setElapsed] = useState(0);
   const [screenError, setScreenError] = useState<string | null>(null);
+  const [breakoutOpen, setBreakoutOpen] = useState(false);
+  const [breakout, setBreakout] = useState<{ open: boolean; rooms: { id: string; name: string; userIds: string[] }[]; durationMinutes: number | null; startedAt: string | null } | null>(null);
+  const [roomCount, setRoomCount] = useState(2);
+  const [roomDuration, setRoomDuration] = useState(10);
+  const [breakoutBusy, setBreakoutBusy] = useState(false);
 
   const wsRef = useRef<WebSocket | null>(null);
   const localVideoRef = useRef<HTMLVideoElement>(null);
@@ -247,6 +253,10 @@ export function MeetingPage() {
           }
         }
       }
+      if (data.type === 'call.breakout') {
+        setBreakout(data.breakout);
+        return;
+      }
       if (data.type === 'meeting.chat') {
         setChat((prev) => [...prev, { id: data.id, name: data.name, body: data.body, at: data.at }]);
       }
@@ -424,6 +434,7 @@ export function MeetingPage() {
 
   const spotlight = sharing ? tiles.find((t) => t.sharing) || tiles[0] : tiles[0];
   const mmss = `${String(Math.floor(elapsed / 60)).padStart(2, '0')}:${String(elapsed % 60).padStart(2, '0')}`;
+  const isHost = !!call && (call.hostId === user?.id || can('meeting.moderate'));
 
   if (loading) {
     return <div className="flex h-full items-center justify-center"><Spinner size={24} /></div>;
@@ -451,6 +462,16 @@ export function MeetingPage() {
           <IconButton label="Toggle layout" onClick={() => setLayout(layout === 'grid' ? 'spotlight' : 'grid')} className="text-ink-300 hover:bg-white/10">
             {layout === 'grid' ? <Maximize2 size={15} /> : <Grid2x2 size={15} />}
           </IconButton>
+          {isHost && (
+            <IconButton
+              label="Breakout rooms"
+              onClick={() => setBreakoutOpen((v) => !v)}
+              active={breakoutOpen}
+              className="text-ink-300 hover:bg-white/10"
+            >
+              <SplitSquareHorizontal size={15} />
+            </IconButton>
+          )}
           <IconButton label="In-call chat" onClick={() => setChatOpen((v) => !v)} active={chatOpen} className="text-ink-300 hover:bg-white/10" badge={chat.length}>
             <Send size={15} />
           </IconButton>
@@ -514,6 +535,110 @@ export function MeetingPage() {
           </aside>
         )}
       </div>
+
+      {breakout?.open && (
+        <div className="border-t border-white/10 bg-brand-500/10 px-3 py-2">
+          <div className="flex flex-wrap items-center gap-2 text-[11.5px] text-white">
+            <SplitSquareHorizontal size={13} className="text-brand-300" />
+            <span className="font-bold">Breakout rooms open</span>
+            {breakout.durationMinutes && (
+              <span className="flex items-center gap-1 text-ink-300"><Timer size={11} /> {breakout.durationMinutes} min</span>
+            )}
+            <span className="text-ink-400">
+              You are in {breakout.rooms.find((r) => r.userIds.includes(user?.id || ''))?.name || 'the main room'}
+            </span>
+            {isHost && (
+              <button
+                type="button"
+                onClick={async () => {
+                  setBreakoutBusy(true);
+                  try {
+                    await api.closeBreakout(callId);
+                    setBreakout(null);
+                    toast({ title: 'Everyone back in the main room', tone: 'success' });
+                  } catch (e: any) {
+                    toast({ title: 'Could not close rooms', body: e.message, tone: 'error' });
+                  } finally {
+                    setBreakoutBusy(false);
+                  }
+                }}
+                className="ml-auto flex items-center gap-1 rounded-lg bg-white/15 px-2 py-1 text-[11px] font-bold"
+              >
+                <DoorOpen size={11} /> Close rooms
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+
+      {breakoutOpen && isHost && (
+        <div className="border-t border-white/10 bg-ink-900 px-3 py-3">
+          <div className="mb-2 flex items-center justify-between">
+            <p className="text-[12px] font-bold text-white">Breakout rooms</p>
+            <button type="button" onClick={() => setBreakoutOpen(false)} className="text-ink-400 hover:text-white"><X size={13} /></button>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <label className="flex items-center gap-1.5 text-[11.5px] text-ink-300">
+              Rooms
+              <input
+                type="number"
+                min={2}
+                max={8}
+                value={roomCount}
+                onChange={(e) => setRoomCount(Math.max(2, Math.min(8, Number(e.target.value) || 2)))}
+                className="w-14 rounded-lg bg-white/10 px-2 py-1 text-white outline-none"
+              />
+            </label>
+            <label className="flex items-center gap-1.5 text-[11.5px] text-ink-300">
+              Minutes
+              <input
+                type="number"
+                min={1}
+                max={120}
+                value={roomDuration}
+                onChange={(e) => setRoomDuration(Math.max(1, Number(e.target.value) || 10))}
+                className="w-16 rounded-lg bg-white/10 px-2 py-1 text-white outline-none"
+              />
+            </label>
+            <button
+              type="button"
+              disabled={breakoutBusy}
+              onClick={async () => {
+                setBreakoutBusy(true);
+                try {
+                  // Shuffle participants across the requested rooms; the host
+                  // stays in room 1 so they can visit the others.
+                  const people = peers.map((p) => p.userId);
+                  const rooms = Array.from({ length: roomCount }, (_, i) => ({
+                    name: `Room ${i + 1}`,
+                    userIds: [] as string[],
+                  }));
+                  people.forEach((uid, i) => rooms[i % roomCount].userIds.push(uid));
+                  if (user?.id) rooms[0].userIds.push(user.id);
+                  const { breakout: created } = await api.setBreakout(callId, {
+                    rooms,
+                    open: true,
+                    durationMinutes: roomDuration,
+                  });
+                  setBreakout(created);
+                  setBreakoutOpen(false);
+                  toast({ title: `${roomCount} breakout rooms opened`, tone: 'success' });
+                } catch (e: any) {
+                  toast({ title: 'Could not open rooms', body: e.message, tone: 'error' });
+                } finally {
+                  setBreakoutBusy(false);
+                }
+              }}
+              className="flex items-center gap-1 rounded-lg bg-brand-600 px-2.5 py-1.5 text-[11.5px] font-bold text-white"
+            >
+              <Shuffle size={12} /> {breakoutBusy ? 'Opening…' : 'Shuffle into rooms'}
+            </button>
+          </div>
+          <p className="mt-1.5 text-[10.5px] text-ink-500">
+            Participants are distributed evenly. Everyone sees which room they are in.
+          </p>
+        </div>
+      )}
 
       <footer className="flex items-center justify-center gap-2 border-t border-white/10 px-3 py-3">
         <CallButton active={micOn} onClick={toggleMic} onIcon={<Mic size={17} />} offIcon={<MicOff size={17} />} label={micOn ? 'Mute' : 'Unmute'} />

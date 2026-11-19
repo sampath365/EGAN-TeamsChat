@@ -25,6 +25,11 @@ const EMPTY = {
   calls: [],
   notifications: [],
   readState: [],
+  channelPrefs: [],
+  hiddenPeople: [],
+  polls: [],
+  pollVotes: [],
+  meetingInvites: [],
   presence: [],
 };
 

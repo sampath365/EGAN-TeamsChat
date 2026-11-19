@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import {
   ArrowLeft, Briefcase, Building2, CalendarDays, Check, Clock, Mail, MapPin, MessageSquare,
-  Network, Pencil, Phone, Save, UserRound, Users, X, Crown, Video,
+  Network, Pencil, Phone, Save, UserRound, Users, X, Crown, Video, Palmtree,
 } from 'lucide-react';
 import { useApp } from '@/context/AppContext';
 import { api } from '@/lib/api';
@@ -31,6 +31,8 @@ export function ProfilePage() {
   const [editing, setEditing] = useState(false);
   const [busy, setBusy] = useState(false);
   const [acting, setActing] = useState<'dm' | 'call' | null>(null);
+  const [ooo, setOoo] = useState({ enabled: false, startDate: '', endDate: '', message: '', delegateId: '' });
+  const [savingOoo, setSavingOoo] = useState(false);
   const [form, setForm] = useState({
     position: '', department: '', employeeId: '', managerId: '',
     phone: '', location: '', timezone: '', bio: '',
@@ -42,6 +44,13 @@ export function ProfilePage() {
     try {
       const profile = await api.profile(targetId);
       setData(profile);
+      setOoo({
+        enabled: !!profile.user.outOfOffice?.enabled,
+        startDate: profile.user.outOfOffice?.startDate || '',
+        endDate: profile.user.outOfOffice?.endDate || '',
+        message: profile.user.outOfOffice?.message || '',
+        delegateId: profile.user.outOfOffice?.delegateId || '',
+      });
       setForm({
         position: profile.user.position || '',
         department: profile.user.department || '',
@@ -344,6 +353,94 @@ export function ProfilePage() {
                 {teamRoles.length === 0 && <p className="text-[11.5px] text-muted">No shared teams.</p>}
               </div>
             </section>
+
+            {isSelf && (
+              <section className="card p-4">
+                <h2 className="mb-2 flex items-center gap-1.5 text-[12.5px] font-bold">
+                  <Palmtree size={13} className="text-violet-500" /> Out of office
+                </h2>
+                <label className="flex cursor-pointer items-center justify-between gap-2 rounded-xl bg-[rgb(var(--surface-2))] px-2.5 py-2">
+                  <span className="text-[12px] font-semibold">{ooo.enabled ? 'Away — replies show your notice' : 'Not away'}</span>
+                  <input
+                    type="checkbox"
+                    className="h-4 w-4 rounded"
+                    checked={ooo.enabled}
+                    onChange={(e) => setOoo({ ...ooo, enabled: e.target.checked })}
+                  />
+                </label>
+                {ooo.enabled && (
+                  <>
+                    <div className="mt-2 grid grid-cols-2 gap-2">
+                      <div>
+                        <label className="label">From</label>
+                        <input type="date" className="input" value={ooo.startDate} onChange={(e) => setOoo({ ...ooo, startDate: e.target.value })} />
+                      </div>
+                      <div>
+                        <label className="label">To</label>
+                        <input type="date" className="input" value={ooo.endDate} onChange={(e) => setOoo({ ...ooo, endDate: e.target.value })} />
+                      </div>
+                    </div>
+                    <label className="label mt-2">Covered by</label>
+                    <select className="input" value={ooo.delegateId} onChange={(e) => setOoo({ ...ooo, delegateId: e.target.value })}>
+                      <option value="">Nobody</option>
+                      {members.filter((m) => m.userId !== person.id).map((m) => (
+                        <option key={m.userId} value={m.userId}>{m.user.name}</option>
+                      ))}
+                    </select>
+                    <label className="label mt-2">Notice</label>
+                    <textarea
+                      className="input min-h-[58px]"
+                      value={ooo.message}
+                      onChange={(e) => setOoo({ ...ooo, message: e.target.value })}
+                      placeholder="I am away until Monday — ping Priya for anything urgent."
+                    />
+                  </>
+                )}
+                <button
+                  type="button"
+                  className="btn-primary mt-2 w-full text-[12px]"
+                  disabled={savingOoo}
+                  onClick={async () => {
+                    setSavingOoo(true);
+                    try {
+                      await updateProfile({
+                        outOfOffice: ooo.enabled
+                          ? {
+                            enabled: true,
+                            startDate: ooo.startDate || null,
+                            endDate: ooo.endDate || null,
+                            message: ooo.message,
+                            delegateId: ooo.delegateId || null,
+                          }
+                          : null,
+                      });
+                      await load();
+                      toast({ title: ooo.enabled ? 'Out of office set' : 'You are back', tone: 'success' });
+                    } catch (e: any) {
+                      toast({ title: 'Could not save', body: e.message, tone: 'error' });
+                    } finally {
+                      setSavingOoo(false);
+                    }
+                  }}
+                >
+                  {savingOoo ? 'Saving…' : 'Save status'}
+                </button>
+              </section>
+            )}
+
+            {!isSelf && person.outOfOffice?.enabled && (
+              <section className="card border-violet-200 p-4 dark:border-violet-500/30">
+                <h2 className="mb-1 flex items-center gap-1.5 text-[12.5px] font-bold text-violet-700 dark:text-violet-300">
+                  <Palmtree size={13} /> Out of office
+                </h2>
+                <p className="text-[11.5px] text-muted">
+                  {person.outOfOffice.startDate && person.outOfOffice.endDate
+                    ? `${person.outOfOffice.startDate} → ${person.outOfOffice.endDate}`
+                    : 'Away'}
+                </p>
+                {person.outOfOffice.message && <p className="mt-1 text-[12px] italic">“{person.outOfOffice.message}”</p>}
+              </section>
+            )}
 
             <section className="card p-4">
               <h2 className="mb-2 text-[12.5px] font-bold">Quick actions</h2>

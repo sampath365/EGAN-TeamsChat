@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import {
-  CalendarClock, CalendarDays, Clock, Copy, Monitor, Plus, Radio, Trash2, Users, Video, X,
+  CalendarClock, CalendarDays, Clock, Copy, Mail, Monitor, Plus, Radio, Trash2, Users, Video, X,
 } from 'lucide-react';
 import { useApp } from '@/context/AppContext';
 import type { CallRow } from '@/lib/types';
@@ -15,7 +15,13 @@ export function MeetingsPage() {
   const [open, setOpen] = useState(false);
   const [title, setTitle] = useState('');
   const [when, setWhen] = useState('');
+  const [description, setDescription] = useState('');
+  const [invitees, setInvitees] = useState<string[]>([]);
+  const [reminders, setReminders] = useState<number[]>([10]);
+  const [sendEmail, setSendEmail] = useState(true);
   const [busy, setBusy] = useState(false);
+
+  const REMINDER_CHOICES = [0, 5, 10, 30, 60];
 
   const live = calls.filter((c) => c.status === 'live');
   const upcoming = calls.filter((c) => c.status === 'scheduled');
@@ -25,12 +31,24 @@ export function MeetingsPage() {
   const start = async () => {
     setBusy(true);
     try {
-      const call = await createCall({ title: title || 'Instant meeting', scheduledAt: when ? new Date(when).toISOString() : null });
+      const call = await createCall({
+        title: title || 'Instant meeting',
+        scheduledAt: when ? new Date(when).toISOString() : null,
+        description,
+        inviteeIds: invitees.length > 0 ? invitees : null,
+        reminders: when ? reminders : [],
+        sendEmail: !!when && sendEmail && invitees.length > 0,
+      });
       setOpen(false);
       setTitle('');
       setWhen('');
-      if (call.status === 'live') navigate(`/meeting/${call.id}`);
-      else toast({ title: 'Meeting scheduled', body: new Date(when).toLocaleString(), tone: 'success' });
+      setDescription('');
+      setInvitees([]);
+      if (call.status === 'live') {
+        navigate(`/meeting/${call.id}`);
+      } else {
+        toast({ title: 'Meeting scheduled', body: new Date(when).toLocaleString(), tone: 'success' });
+      }
     } catch (e: any) {
       toast({ title: 'Could not create meeting', body: e.message, tone: 'error' });
     } finally {
@@ -163,8 +181,59 @@ export function MeetingsPage() {
       >
         <label className="label">Title</label>
         <input className="input" autoFocus value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Sprint planning" />
+
         <label className="label mt-3">Start time (optional)</label>
         <input type="datetime-local" className="input" value={when} onChange={(e) => setWhen(e.target.value)} />
+
+        <label className="label mt-3">Agenda (optional)</label>
+        <textarea className="input min-h-[56px]" value={description} onChange={(e) => setDescription(e.target.value)} placeholder="What we will cover" />
+
+        <label className="label mt-3">Invite</label>
+        <div className="max-h-32 space-y-0.5 overflow-y-auto rounded-xl border p-1.5 bordered">
+          {members.filter((m) => m.userId !== user?.id).map((m) => (
+            <label key={m.userId} className="flex cursor-pointer items-center gap-2 rounded-lg px-1.5 py-1 hover:bg-ink-50 dark:hover:bg-white/[0.05]">
+              <input
+                type="checkbox"
+                className="h-3.5 w-3.5 rounded"
+                checked={invitees.includes(m.userId)}
+                onChange={(e) => setInvitees((prev) => (e.target.checked ? [...prev, m.userId] : prev.filter((id) => id !== m.userId)))}
+              />
+              <Avatar name={m.user.name} color={m.user.avatarColor} size={20} />
+              <span className="min-w-0 flex-1 truncate text-[12px] font-semibold">{m.user.name}</span>
+              <span className="truncate text-[10px] text-muted">{m.user.position || ''}</span>
+            </label>
+          ))}
+        </div>
+        <p className="mt-1 text-[10.5px] text-muted">Leave everyone unticked to ring the whole team.</p>
+
+        {!!when && (
+          <>
+            <label className="label mt-3">Remind invitees</label>
+            <div className="flex flex-wrap gap-1.5">
+              {REMINDER_CHOICES.map((mins) => {
+                const on = reminders.includes(mins);
+                return (
+                  <button
+                    key={mins}
+                    type="button"
+                    onClick={() => setReminders((prev) => (on ? prev.filter((m) => m !== mins) : [...prev, mins].sort((a, b) => a - b)))}
+                    className={cn(
+                      'rounded-lg border px-2 py-1 text-[11px] font-bold transition bordered',
+                      on ? 'border-brand-400 bg-brand-50 text-brand-700 dark:bg-brand-500/20 dark:text-brand-200' : 'text-muted hover:bg-ink-50 dark:hover:bg-white/[0.05]',
+                    )}
+                  >
+                    {mins === 0 ? 'At start' : `${mins} min before`}
+                  </button>
+                );
+              })}
+            </div>
+
+            <label className="mt-3 flex cursor-pointer items-center gap-2 text-[12.5px] font-semibold">
+              <input type="checkbox" className="h-4 w-4 rounded" checked={sendEmail} onChange={(e) => setSendEmail(e.target.checked)} />
+              <Mail size={13} /> Email the invite so they can accept
+            </label>
+          </>
+        )}
       </Modal>
     </div>
   );

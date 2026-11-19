@@ -21,6 +21,8 @@ import { JoinPage } from './pages/JoinPage';
 import { ProfilePage } from './pages/ProfilePage';
 import { OrgChartPage } from './pages/OrgChartPage';
 import { ReportsPage } from './pages/ReportsPage';
+import { CalendarPage } from './pages/CalendarPage';
+import { MeetingInvitePage } from './pages/MeetingInvitePage';
 
 export default function App() {
   const { ready, user, channels, unreadTotal, theme } = useApp();
@@ -68,6 +70,7 @@ export default function App() {
     return (
       <Routes>
         <Route path="/join/:code" element={<JoinPage />} />
+        <Route path="/invite/:token" element={<MeetingInvitePage />} />
         <Route path="*" element={<LoginPage />} />
       </Routes>
     );
@@ -129,6 +132,8 @@ export default function App() {
             <Route path="/profile/:userId" element={<ProfilePage />} />
             <Route path="/org" element={<OrgChartPage />} />
             <Route path="/reports" element={<ReportsPage />} />
+            <Route path="/calendar" element={<CalendarPage />} />
+            <Route path="/invite/:token" element={<MeetingInvitePage />} />
             <Route path="/threads" element={<ThreadsPage />} />
             <Route path="/settings" element={<SettingsPage />} />
             <Route path="/join/:code" element={<JoinPage />} />
