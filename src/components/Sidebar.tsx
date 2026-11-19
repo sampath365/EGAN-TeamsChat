@@ -3,13 +3,20 @@ import { Link, NavLink, useLocation, useNavigate } from 'react-router-dom';
 import {
   Bell, CalendarClock, ChevronDown, Hash, KanbanSquare, Lock, LogOut, MessageSquarePlus, Moon,
   Plus, Search, Settings, Sun, Users, Video, CheckSquare, FolderOpen, StickyNote, Sparkles, X,
-  Network, WifiOff, BarChart3, BellOff, CalendarDays,
+  Network, WifiOff, BarChart3, BellOff, CalendarDays, PanelLeftClose,
 } from 'lucide-react';
 import { useApp } from '@/context/AppContext';
 import { cn } from '@/lib/utils';
 import { Avatar, Badge, IconButton } from './ui';
 
-export function Sidebar({ onOpenPalette, onClose, mobile }: { onOpenPalette: () => void; onClose?: () => void; mobile?: boolean }) {
+export function Sidebar({
+  onOpenPalette, onClose, onCollapse, mobile,
+}: {
+  onOpenPalette: () => void;
+  onClose?: () => void;
+  onCollapse?: () => void;
+  mobile?: boolean;
+}) {
   const {
     teams, teamId, team, channels, members, selectTeam, createTeam, createChannel, can, logout, user,
     notifications, unreadTotal, theme, setTheme, online, refreshNotifications, markNotificationsRead,
@@ -71,6 +78,18 @@ export function Sidebar({ onOpenPalette, onClose, mobile }: { onOpenPalette: () 
           </span>
           <ChevronDown size={15} className={cn('shrink-0 text-muted transition', teamMenu && 'rotate-180')} />
         </button>
+
+        {onCollapse && (
+          <button
+            type="button"
+            onClick={onCollapse}
+            aria-label="Hide sidebar"
+            title="Hide sidebar (⌘B)"
+            className="absolute -right-1 top-1/2 hidden h-6 w-6 -translate-y-1/2 items-center justify-center rounded-lg border bg-[rgb(var(--surface))] text-muted shadow-soft transition hover:text-ink-800 dark:hover:text-ink-100 lg:flex bordered"
+          >
+            <PanelLeftClose size={13} />
+          </button>
+        )}
 
         {teamMenu && (
           <>

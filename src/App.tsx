@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react';
 import { Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import {
-  Bell, CheckSquare, Hash, Home, KanbanSquare, Menu, MessageSquare, Search, Users, Video, X,
+  Bell, CheckSquare, Hash, Home, KanbanSquare, Menu, MessageSquare, PanelLeftOpen, Search,
+  Users, Video, X,
 } from 'lucide-react';
 import { useApp } from './context/AppContext';
 import { Sidebar } from './components/Sidebar';
@@ -29,6 +30,31 @@ export default function App() {
   const location = useLocation();
   const navigate = useNavigate();
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  // The desktop sidebar can be collapsed to give the conversation full width.
+  // Remembered per device so it does not spring back on every reload.
+  const [sidebarHidden, setSidebarHidden] = useState(() => {
+    try {
+      return localStorage.getItem('pulse.sidebar.hidden') === '1';
+    } catch {
+      return false;
+    }
+  });
+  useEffect(() => {
+    try {
+      localStorage.setItem('pulse.sidebar.hidden', sidebarHidden ? '1' : '0');
+    } catch { /* storage may be blocked */ }
+  }, [sidebarHidden]);
+  // ⌘B / Ctrl+B toggles the sidebar, the shortcut people already expect.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'b') {
+        e.preventDefault();
+        setSidebarHidden((v) => !v);
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
   const [paletteOpen, setPaletteOpen] = useState(false);
 
   // ⌘K / Ctrl+K palette, ⌘/ focuses it too.
@@ -82,9 +108,9 @@ export default function App() {
   return (
     <div className="flex h-full overflow-hidden">
       {/* desktop sidebar */}
-      {!isMeeting && (
+      {!isMeeting && !sidebarHidden && (
         <div className="hidden lg:flex">
-          <Sidebar onOpenPalette={() => setPaletteOpen(true)} />
+          <Sidebar onOpenPalette={() => setPaletteOpen(true)} onCollapse={() => setSidebarHidden(true)} />
         </div>
       )}
 
@@ -101,7 +127,19 @@ export default function App() {
         </div>
       )}
 
-      <main className="flex min-w-0 flex-1 flex-col">
+      {!isMeeting && sidebarHidden && (
+        <button
+          type="button"
+          onClick={() => setSidebarHidden(false)}
+          aria-label="Show sidebar"
+          title="Show sidebar (⌘B)"
+          className="fixed left-2 top-2 z-30 hidden h-9 w-9 items-center justify-center rounded-xl border bg-[rgb(var(--surface))] text-muted shadow-soft transition hover:text-ink-800 dark:hover:text-ink-100 lg:flex bordered"
+        >
+          <PanelLeftOpen size={17} />
+        </button>
+      )}
+
+      <main className={cn('flex min-w-0 flex-1 flex-col', !isMeeting && sidebarHidden && 'lg:pl-12')}>
         {/* mobile top bar */}
         {!isMeeting && (
           <header className="flex items-center justify-between gap-2 border-b px-2.5 py-2 lg:hidden bordered">

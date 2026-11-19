@@ -18,6 +18,12 @@ const KIND_META = {
 
 const startOfMonth = (d: Date) => new Date(d.getFullYear(), d.getMonth(), 1);
 const sameDay = (a: Date, b: Date) => a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
+const startOfWeek = (d: Date) => {
+  const s = new Date(d);
+  s.setDate(d.getDate() - d.getDay());
+  s.setHours(0, 0, 0, 0);
+  return s;
+};
 const isoDay = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 
 export function CalendarPage() {
@@ -28,6 +34,18 @@ export function CalendarPage() {
   const [selected, setSelected] = useState<Date>(new Date());
   const [filter, setFilter] = useState<'all' | 'meeting' | 'task' | 'ooo'>('all');
   const [scope, setScope] = useState<'team' | 'mine'>('team');
+  const [view, setView] = useState<'day' | 'week' | 'month'>(() => {
+    try {
+      const saved = localStorage.getItem('pulse.calendar.view');
+      if (saved === 'day' || saved === 'week' || saved === 'month') return saved;
+    } catch { /* ignore */ }
+    return 'month';
+  });
+  useEffect(() => {
+    try {
+      localStorage.setItem('pulse.calendar.view', view);
+    } catch { /* ignore */ }
+  }, [view]);
   const [detail, setDetail] = useState<CalendarEvent | null>(null);
 
   useEffect(() => {
@@ -88,6 +106,49 @@ export function CalendarPage() {
 
   const monthLabel = cursor.toLocaleDateString(undefined, { month: 'long', year: 'numeric' });
 
+  // Each view steps by its own unit: a day, a week or a month. Stepping a
+  // month in day view would skip the days the user is actually looking at.
+  const step = (dir: number) => {
+    if (view === 'day') {
+      const d = new Date(selected);
+      d.setDate(d.getDate() + dir);
+      setSelected(d);
+      setCursor(startOfMonth(d));
+    } else if (view === 'week') {
+      const d = new Date(selected);
+      d.setDate(d.getDate() + dir * 7);
+      setSelected(d);
+      setCursor(startOfMonth(d));
+    } else {
+      setCursor(new Date(cursor.getFullYear(), cursor.getMonth() + dir, 1));
+    }
+  };
+
+  const goToday = () => {
+    setSelected(new Date());
+    setCursor(startOfMonth(new Date()));
+  };
+
+  const periodLabel = view === 'day'
+    ? selected.toLocaleDateString(undefined, { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })
+    : view === 'week'
+      ? (() => {
+        const ws = startOfWeek(selected);
+        const we = new Date(ws);
+        we.setDate(ws.getDate() + 6);
+        return `${ws.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })} – ${we.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}`;
+      })()
+      : monthLabel;
+
+  const weekDays = useMemo(() => {
+    const ws = startOfWeek(selected);
+    return Array.from({ length: 7 }, (_, i) => {
+      const d = new Date(ws);
+      d.setDate(ws.getDate() + i);
+      return d;
+    });
+  }, [selected]);
+
   return (
     <div className="h-full overflow-y-auto">
       <div className="mx-auto max-w-6xl px-4 py-5 sm:px-6">
@@ -107,13 +168,29 @@ export function CalendarPage() {
             </p>
           </div>
           <div className="flex items-center gap-1">
-            <IconButton label="Previous month" onClick={() => setCursor(new Date(cursor.getFullYear(), cursor.getMonth() - 1, 1))}>
+            <div className="mr-1 flex rounded-xl border p-0.5 bordered">
+              {(['day', 'week', 'month'] as const).map((v) => (
+                <button
+                  key={v}
+                  type="button"
+                  onClick={() => setView(v)}
+                  aria-pressed={view === v}
+                  className={cn(
+                    'rounded-lg px-2.5 py-1 text-[11px] font-bold capitalize transition',
+                    view === v ? 'bg-brand-600 text-white' : 'text-muted hover:text-ink-800 dark:hover:text-ink-100',
+                  )}
+                >
+                  {v}
+                </button>
+              ))}
+            </div>
+            <IconButton label={`Previous ${view}`} onClick={() => step(-1)}>
               <ChevronLeft size={16} />
             </IconButton>
-            <button type="button" onClick={() => { setCursor(startOfMonth(new Date())); setSelected(new Date()); }} className="btn-outline h-9 px-3 text-[12px]">
+            <button type="button" onClick={goToday} className="btn-outline h-9 px-3 text-[12px]">
               Today
             </button>
-            <IconButton label="Next month" onClick={() => setCursor(new Date(cursor.getFullYear(), cursor.getMonth() + 1, 1))}>
+            <IconButton label={`Next ${view}`} onClick={() => step(1)}>
               <ChevronRight size={16} />
             </IconButton>
           </div>
@@ -121,7 +198,7 @@ export function CalendarPage() {
 
         <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
           <div className="flex items-center gap-2">
-            <h2 className="text-[15px] font-extrabold">{monthLabel}</h2>
+            <h2 className="text-[15px] font-extrabold">{periodLabel}</h2>
             <div className="flex rounded-xl border p-0.5 bordered">
               {(['team', 'mine'] as const).map((sc) => (
                 <button
@@ -152,6 +229,21 @@ export function CalendarPage() {
 
         {loading ? (
           <div className="skeleton h-80" />
+        ) : view === 'day' ? (
+          <DayView
+            day={selected}
+            events={eventsByDay.get(isoDay(selected)) || []}
+            onOpen={setDetail}
+            onPrev={() => step(-1)}
+            onNext={() => step(1)}
+          />
+        ) : view === 'week' ? (
+          <WeekView
+            days={weekDays}
+            eventsByDay={eventsByDay}
+            onOpen={setDetail}
+            onSelectDay={(d) => { setSelected(d); setView('day'); }}
+          />
         ) : (
           <div className="grid gap-4 lg:grid-cols-[1fr_300px]">
             {/* month grid */}
@@ -305,6 +397,185 @@ export function CalendarPage() {
           </div>
         )}
       </Modal>
+    </div>
+  );
+}
+
+
+/* ------------------------------------------------------------- day view */
+
+function DayView({
+  day, events, onOpen, onPrev, onNext,
+}: {
+  day: Date;
+  events: CalendarEvent[];
+  onOpen: (e: CalendarEvent) => void;
+  onPrev: () => void;
+  onNext: () => void;
+}) {
+  const timed = events
+    .filter((e) => !e.allDay)
+    .sort((a, b) => a.at.localeCompare(b.at));
+  const allDay = events.filter((e) => e.allDay);
+
+  // Hour rail from 08:00 to 20:00 so the day reads like a schedule, not a list.
+  const hours = Array.from({ length: 13 }, (_, i) => 8 + i);
+  const byHour = new Map<number, CalendarEvent[]>();
+  for (const e of timed) {
+    const h = new Date(e.at).getHours();
+    if (!byHour.has(h)) byHour.set(h, []);
+    byHour.get(h)!.push(e);
+  }
+
+  return (
+    <div className="overflow-hidden rounded-2xl border bordered">
+      <div className="flex items-center justify-between border-b bg-[rgb(var(--surface-2))] px-3 py-2 bordered">
+        <div>
+          <p className="text-[13px] font-extrabold">
+            {day.toLocaleDateString(undefined, { weekday: 'long', day: 'numeric', month: 'long' })}
+          </p>
+          <p className="text-[10.5px] text-muted">{events.length} {events.length === 1 ? 'item' : 'items'} this day</p>
+        </div>
+        <div className="flex items-center gap-1">
+          <IconButton label="Previous day" onClick={onPrev}><ChevronLeft size={15} /></IconButton>
+          <IconButton label="Next day" onClick={onNext}><ChevronRight size={15} /></IconButton>
+        </div>
+      </div>
+
+      {allDay.length > 0 && (
+        <div className="border-b px-3 py-2 bordered">
+          <p className="mb-1 text-[9.5px] font-bold uppercase tracking-wider text-muted">All day</p>
+          <div className="space-y-1">
+            {allDay.map((e) => (
+              <button
+                key={e.id}
+                type="button"
+                onClick={() => onOpen(e)}
+                className="flex w-full items-center gap-2 rounded-lg border px-2 py-1.5 text-left transition hover:border-brand-300 bordered"
+              >
+                <span className={cn('h-2 w-2 shrink-0 rounded-full', KIND_META[e.kind].dot)} />
+                <span className="min-w-0 flex-1 truncate text-[12px] font-semibold">{e.title}</span>
+                <Badge tone={KIND_META[e.kind].tone}>{KIND_META[e.kind].label}</Badge>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      <div>
+        {hours.map((h) => {
+          const rows = byHour.get(h) || [];
+          return (
+            <div key={h} className="flex border-b last:border-b-0 bordered">
+              <div className="w-14 shrink-0 border-r px-1.5 py-2 text-right text-[10px] font-bold text-muted bordered">
+                {new Date(2000, 0, 1, h).toLocaleTimeString(undefined, { hour: 'numeric' })}
+              </div>
+              <div className={cn('min-w-0 flex-1 px-2 py-1.5', rows.length === 0 && 'min-h-[34px]')}>
+                {rows.length === 0 ? (
+                  <span className="block h-full" />
+                ) : (
+                  <div className="space-y-1">
+                    {rows.map((e) => (
+                      <button
+                        key={e.id}
+                        type="button"
+                        onClick={() => onOpen(e)}
+                        className="flex w-full items-start gap-2 rounded-lg border-l-[3px] bg-[rgb(var(--surface-2))] px-2 py-1.5 text-left transition hover:bg-ink-100 dark:hover:bg-white/[0.07]"
+                        style={{ borderLeftColor: e.kind === 'meeting' ? 'rgb(var(--brand-500))' : e.kind === 'task' ? '#f59e0b' : '#8b5cf6' }}
+                      >
+                        <span className="min-w-0 flex-1">
+                          <span className="block truncate text-[12px] font-bold">{e.title}</span>
+                          <span className="block text-[10px] text-muted">
+                            {new Date(e.at).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })}
+                            {e.kind === 'meeting' && e.hostName ? ` · ${e.hostName}` : ''}
+                            {e.kind === 'task' && e.assigneeName ? ` · ${e.assigneeName}` : ''}
+                          </span>
+                        </span>
+                        <Badge tone={KIND_META[e.kind].tone}>{KIND_META[e.kind].label}</Badge>
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------ week view */
+
+function WeekView({
+  days, eventsByDay, onOpen, onSelectDay,
+}: {
+  days: Date[];
+  eventsByDay: Map<string, CalendarEvent[]>;
+  onOpen: (e: CalendarEvent) => void;
+  onSelectDay: (d: Date) => void;
+}) {
+  return (
+    <div className="overflow-hidden rounded-2xl border bordered">
+      <div className="grid grid-cols-7 border-b bg-[rgb(var(--surface-2))] bordered">
+        {days.map((d) => {
+          const isToday = sameDay(d, new Date());
+          return (
+            <button
+              key={isoDay(d)}
+              type="button"
+              onClick={() => onSelectDay(d)}
+              className="px-1 py-1.5 text-center transition hover:bg-ink-100 dark:hover:bg-white/[0.06]"
+            >
+              <span className="block text-[9.5px] font-bold uppercase tracking-wider text-muted">
+                {d.toLocaleDateString(undefined, { weekday: 'short' })}
+              </span>
+              <span className={cn(
+                'mx-auto mt-0.5 flex h-6 w-6 items-center justify-center rounded-full text-[12px] font-extrabold',
+                isToday ? 'bg-brand-600 text-white' : 'text-ink-700 dark:text-ink-200',
+              )}>
+                {d.getDate()}
+              </span>
+            </button>
+          );
+        })}
+      </div>
+      <div className="grid grid-cols-7">
+        {days.map((d) => {
+          const rows = eventsByDay.get(isoDay(d)) || [];
+          const isToday = sameDay(d, new Date());
+          return (
+            <div
+              key={isoDay(d)}
+              className={cn(
+                'min-h-[220px] border-r p-1 last:border-r-0 bordered',
+                isToday && 'bg-brand-50/40 dark:bg-brand-500/[0.07]',
+              )}
+            >
+              {rows.length === 0 ? (
+                <p className="px-1 py-2 text-center text-[9.5px] text-muted">—</p>
+              ) : (
+                <div className="space-y-1">
+                  {rows.map((e) => (
+                    <button
+                      key={e.id}
+                      type="button"
+                      onClick={() => onOpen(e)}
+                      className="block w-full rounded-md border-l-[3px] bg-[rgb(var(--surface-2))] px-1.5 py-1 text-left transition hover:bg-ink-100 dark:hover:bg-white/[0.07]"
+                      style={{ borderLeftColor: e.kind === 'meeting' ? 'rgb(var(--brand-500))' : e.kind === 'task' ? '#f59e0b' : '#8b5cf6' }}
+                    >
+                      <span className="block truncate text-[10px] font-bold leading-tight">{e.title}</span>
+                      <span className="block text-[9px] text-muted">
+                        {e.allDay ? 'All day' : new Date(e.at).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }
