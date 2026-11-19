@@ -63,6 +63,24 @@ export const api = {
   me: () => get<{ user: User }>('/auth/me'),
   updateMe: (input: Partial<Pick<User, 'name' | 'title' | 'status' | 'statusText' | 'avatarUrl'>> & { outOfOffice?: OutOfOffice | null }) =>
     patch<{ user: User }>('/auth/me', input),
+  availability: (teamId: string, date: string, duration: number, userIds: string[]) => {
+    const q = new URLSearchParams({ date, duration: String(duration) });
+    if (userIds.length) q.set('userIds', userIds.join(','));
+    return get<{
+      date: string;
+      durationMinutes: number;
+      window: { start: string; end: string };
+      people: { user: User; busy: { start: number; end: number; title: string }[] }[];
+      slots: { start: string; end: string; busyUserIds: string[]; freeCount: number; total: number }[];
+    }>(`/teams/${teamId}/availability?${q.toString()}`);
+  },
+  suggestSlots: (teamId: string, userIds: string[], duration: number, days = 10) => {
+    const q = new URLSearchParams({ duration: String(duration), days: String(days) });
+    if (userIds.length) q.set('userIds', userIds.join(','));
+    return get<{ durationMinutes: number; userIds: string[]; suggestions: { start: string; end: string; date: string; label: string }[] }>(
+      `/teams/${teamId}/suggest-slots?${q.toString()}`,
+    );
+  },
   calendar: (teamId: string, range: { from?: string; to?: string; scope?: 'team' | 'mine' | 'all' } = {}) => {
     const q = new URLSearchParams();
     if (range.from) q.set('from', range.from);
@@ -179,7 +197,7 @@ export const api = {
   createCall: (teamId: string, input: {
     title?: string; channelId?: string | null; scheduledAt?: string | null;
     inviteeIds?: string[] | null; reminders?: number[] | null;
-    description?: string; sendEmail?: boolean;
+    description?: string; sendEmail?: boolean; durationMinutes?: number;
   }) =>
     post<{ call: CallRow; emailResult?: { attempted: number; delivered: number; reason: string | null } | null }>(`/teams/${teamId}/calls`, input),
 

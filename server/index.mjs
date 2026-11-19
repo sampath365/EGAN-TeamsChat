@@ -1218,6 +1218,149 @@ app.post('/api/meeting-invites/:token/:action', wrap(async (req, res) => {
   res.json({ status: invite.status });
 }));
 
+/* ------------------------------------------------- scheduling availability */
+
+// Working window used for slot suggestions. Deliberately a constant rather than
+// a per-person schedule: EGAN runs one shift, and inventing per-person hours
+// would produce slots nobody actually works.
+const WORK_START_HOUR = 9;
+const WORK_END_HOUR = 19;
+const SLOT_MINUTES = 30;
+
+function busyBlocksFor(userIds, dayStart, dayEnd) {
+  // A person is busy when they host or are invited to a meeting that overlaps
+  // the window, or when they are out of office that day.
+  const blocks = new Map(userIds.map((id) => [id, []]));
+
+  for (const call of db.calls) {
+    if (call.status === 'cancelled') continue;
+    const at = call.scheduledAt || call.startedAt;
+    if (!at) continue;
+    const startMs = new Date(at).getTime();
+    if (!Number.isFinite(startMs)) continue;
+    const endMs = startMs + (call.durationMinutes || 30) * 60000;
+    if (endMs <= dayStart.getTime() || startMs >= dayEnd.getTime()) continue;
+
+    const involved = new Set([call.hostId, ...(call.inviteeIds || []), ...(call.participants || [])]);
+    for (const uid of involved) {
+      if (!blocks.has(uid)) continue;
+      blocks.get(uid).push({ start: startMs, end: endMs, title: call.title });
+    }
+  }
+
+  const dayKey = dayStart.toISOString().slice(0, 10);
+  for (const uid of userIds) {
+    const u = db.users.find((x) => x.id === uid);
+    const ooo = u?.outOfOffice;
+    if (!ooo?.enabled) continue;
+    const start = ooo.startDate || dayKey;
+    const end = ooo.endDate || start;
+    if (dayKey >= start && dayKey <= end) {
+      blocks.get(uid).push({ start: dayStart.getTime(), end: dayEnd.getTime(), title: 'Out of office' });
+    }
+  }
+
+  return blocks;
+}
+
+function overlaps(aStart, aEnd, bStart, bEnd) {
+  return aStart < bEnd && bStart < aEnd;
+}
+
+// Per-person busy/free for one day, so the picker can show who is free when.
+app.get('/api/teams/:teamId/availability', authRequired, wrap(async (req, res) => {
+  const team = db.teams.find((t) => t.id === req.params.teamId);
+  if (!team) throw fail(404, 'Team not found.');
+  requireMember(team.id, req.user.id);
+
+  const date = String(req.query.date || new Date().toISOString().slice(0, 10));
+  const duration = Math.max(15, Math.min(Number(req.query.duration || 30), 480));
+  const dayStart = new Date(`${date}T${String(WORK_START_HOUR).padStart(2, '0')}:00:00`);
+  const dayEnd = new Date(`${date}T${String(WORK_END_HOUR).padStart(2, '0')}:00:00`);
+
+  const requested = String(req.query.userIds || '').split(',').filter(Boolean);
+  const memberIds = db.memberships.filter((m) => m.teamId === team.id).map((m) => m.userId);
+  const userIds = (requested.length ? requested : memberIds).filter((id) => memberIds.includes(id));
+
+  const blocks = busyBlocksFor(userIds, dayStart, dayEnd);
+
+  const slots = [];
+  for (let t = dayStart.getTime(); t + duration * 60000 <= dayEnd.getTime(); t += SLOT_MINUTES * 60000) {
+    const end = t + duration * 60000;
+    const busy = userIds.filter((uid) =>
+      (blocks.get(uid) || []).some((b) => overlaps(t, end, b.start, b.end)));
+    slots.push({
+      start: new Date(t).toISOString(),
+      end: new Date(end).toISOString(),
+      busyUserIds: busy,
+      freeCount: userIds.length - busy.length,
+      total: userIds.length,
+    });
+  }
+
+  res.json({
+    date,
+    durationMinutes: duration,
+    window: { start: dayStart.toISOString(), end: dayEnd.toISOString() },
+    people: userIds.map((uid) => {
+      const u = db.users.find((x) => x.id === uid);
+      return {
+        user: publicUser(u),
+        busy: (blocks.get(uid) || []).sort((a, b) => a.start - b.start),
+      };
+    }),
+    slots,
+  });
+}));
+
+// Ranked suggestions: the earliest slots where EVERY invitee is free. This is
+// what "find a time" means — a slot that suits you but not the invitees is not
+// a suggestion.
+app.get('/api/teams/:teamId/suggest-slots', authRequired, wrap(async (req, res) => {
+  const team = db.teams.find((t) => t.id === req.params.teamId);
+  if (!team) throw fail(404, 'Team not found.');
+  requireMember(team.id, req.user.id);
+
+  const duration = Math.max(15, Math.min(Number(req.query.duration || 30), 480));
+  const days = Math.max(1, Math.min(Number(req.query.days || 5), 14));
+  const requested = String(req.query.userIds || '').split(',').filter(Boolean);
+  const memberIds = db.memberships.filter((m) => m.teamId === team.id).map((m) => m.userId);
+  const userIds = (requested.length ? requested : memberIds).filter((id) => memberIds.includes(id));
+  if (userIds.length === 0) throw fail(400, 'Nobody to schedule with.');
+
+  const suggestions = [];
+  const nowMs = Date.now();
+
+  for (let d = 0; d < days && suggestions.length < 6; d += 1) {
+    const day = new Date();
+    day.setDate(day.getDate() + d);
+    const dayKey = `${day.getFullYear()}-${String(day.getMonth() + 1).padStart(2, '0')}-${String(day.getDate()).padStart(2, '0')}`;
+    const dayStart = new Date(`${dayKey}T${String(WORK_START_HOUR).padStart(2, '0')}:00:00`);
+    const dayEnd = new Date(`${dayKey}T${String(WORK_END_HOUR).padStart(2, '0')}:00:00`);
+    const blocks = busyBlocksFor(userIds, dayStart, dayEnd);
+
+    for (let t = dayStart.getTime(); t + duration * 60000 <= dayEnd.getTime(); t += SLOT_MINUTES * 60000) {
+      if (suggestions.length >= 6) break;
+      // Never suggest a slot in the past.
+      if (t < nowMs + 5 * 60000) continue;
+      const end = t + duration * 60000;
+      const allFree = userIds.every((uid) =>
+        !(blocks.get(uid) || []).some((b) => overlaps(t, end, b.start, b.end)));
+      if (!allFree) continue;
+      suggestions.push({
+        start: new Date(t).toISOString(),
+        end: new Date(end).toISOString(),
+        date: dayKey,
+        label: new Date(t).toLocaleString(undefined, {
+          weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit',
+        }),
+      });
+    }
+  }
+
+  res.json({ durationMinutes: duration, userIds, suggestions });
+}));
+
 /* --------------------------------------------------------------- calendar */
 
 // Everything that belongs on a calendar for a team in one read: meetings, task
@@ -1623,7 +1766,7 @@ app.post('/api/teams/:teamId/calls', authRequired, wrap(async (req, res) => {
   requirePermission(req.params.teamId, req.user.id, 'meeting.host');
   const {
     title = 'Instant meeting', channelId = null, scheduledAt = null, inviteeIds = null,
-    reminders = null, description = '', sendEmail = false,
+    reminders = null, description = '', sendEmail = false, durationMinutes = 30,
   } = req.body || {};
 
   // A 1:1 call passes inviteeIds; a channel/team meeting passes none and rings
@@ -1658,6 +1801,7 @@ app.post('/api/teams/:teamId/calls', authRequired, wrap(async (req, res) => {
     // Otherwise a meeting created 2 minutes out with a "10 min before"
     // reminder would fire the instant it is saved.
     remindersSent: [],
+    durationMinutes: Number(durationMinutes) > 0 ? Math.min(Number(durationMinutes), 480) : 30,
   };
   if (call.scheduledAt) {
     const startMs = new Date(call.scheduledAt).getTime();

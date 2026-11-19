@@ -7,6 +7,7 @@ import { useApp } from '@/context/AppContext';
 import type { CallRow } from '@/lib/types';
 import { cn, copyText, timeAgo } from '@/lib/utils';
 import { Avatar, Badge, EmptyState, IconButton, Modal, Tabs } from '@/components/ui';
+import { TimeSlotPicker } from '@/components/TimeSlotPicker';
 
 export function MeetingsPage() {
   const { calls, members, user, createCall, updateCall, can, toast, online } = useApp();
@@ -20,6 +21,8 @@ export function MeetingsPage() {
   const [reminders, setReminders] = useState<number[]>([]);
   const [sendEmail, setSendEmail] = useState(true);
   const [busy, setBusy] = useState(false);
+  const [duration, setDuration] = useState(30);
+  const [slotOpen, setSlotOpen] = useState(false);
 
   const REMINDER_CHOICES = [0, 5, 10, 30, 60];
 
@@ -38,6 +41,7 @@ export function MeetingsPage() {
         inviteeIds: invitees.length > 0 ? invitees : null,
         reminders: when ? reminders : [],
         sendEmail: !!when && sendEmail && invitees.length > 0,
+        durationMinutes: duration,
       });
       setOpen(false);
       setTitle('');
@@ -182,8 +186,30 @@ export function MeetingsPage() {
         <label className="label">Title</label>
         <input className="input" autoFocus value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Sprint planning" />
 
-        <label className="label mt-3">Start time (optional)</label>
-        <input type="datetime-local" className="input" value={when} onChange={(e) => setWhen(e.target.value)} />
+        <label className="label mt-3">When</label>
+        <div className="flex items-center gap-1.5">
+          <button
+            type="button"
+            onClick={() => setSlotOpen(true)}
+            className="input flex flex-1 items-center gap-2 text-left"
+          >
+            <CalendarClock size={14} className="shrink-0 text-brand-600 dark:text-brand-300" />
+            <span className={cn('min-w-0 flex-1 truncate', !when && 'text-muted')}>
+              {when
+                ? new Date(when).toLocaleString(undefined, { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })
+                : 'Find a time that works for everyone'}
+            </span>
+            <span className="shrink-0 rounded-md bg-brand-50 px-1.5 py-0.5 text-[10px] font-bold text-brand-700 dark:bg-brand-500/20 dark:text-brand-200">
+              {duration} min
+            </span>
+          </button>
+          {when && (
+            <IconButton label="Clear the time" onClick={() => setWhen('')}><X size={14} /></IconButton>
+          )}
+        </div>
+        <p className="mt-1 text-[10.5px] text-muted">
+          Leave blank to start immediately. The picker only offers slots where everyone invited is free.
+        </p>
 
         <label className="label mt-3">Agenda (optional)</label>
         <textarea className="input min-h-[56px]" value={description} onChange={(e) => setDescription(e.target.value)} placeholder="What we will cover" />
@@ -240,6 +266,17 @@ export function MeetingsPage() {
           </>
         )}
       </Modal>
+
+      <TimeSlotPicker
+        open={slotOpen}
+        onClose={() => setSlotOpen(false)}
+        invitees={invitees}
+        duration={duration}
+        onPick={(iso, minutes) => {
+          setWhen(iso.slice(0, 16));
+          setDuration(minutes);
+        }}
+      />
     </div>
   );
 }

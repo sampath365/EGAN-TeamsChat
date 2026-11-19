@@ -64,7 +64,7 @@ interface AppState {
   createCall: (input: {
     title?: string; channelId?: string | null; scheduledAt?: string | null;
     inviteeIds?: string[] | null; reminders?: number[] | null;
-    description?: string; sendEmail?: boolean;
+    description?: string; sendEmail?: boolean; durationMinutes?: number;
   }) => Promise<CallRow>;
   dms: DirectMessage[];
   openDm: (userId: string) => Promise<Channel>;
@@ -693,7 +693,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const createCall = useCallback(async (input: {
     title?: string; channelId?: string | null; scheduledAt?: string | null;
     inviteeIds?: string[] | null; reminders?: number[] | null;
-    description?: string; sendEmail?: boolean;
+    description?: string; sendEmail?: boolean; durationMinutes?: number;
   }) => {
     if (!teamId) throw new Error('No team selected');
     const { call } = await api.createCall(teamId, input);
