@@ -15,6 +15,15 @@ export function publicUser(u) {
     name: u.name,
     email: u.email,
     title: u.title || '',
+    position: u.position || u.title || '',
+    department: u.department || '',
+    employeeId: u.employeeId || '',
+    managerId: u.managerId || null,
+    phone: u.phone || '',
+    location: u.location || '',
+    timezone: u.timezone || '',
+    bio: u.bio || '',
+    joinedAt: u.joinedAt || u.createdAt,
     avatarColor: u.avatarColor,
     avatarUrl: u.avatarUrl || null,
     status: u.status || 'offline',
@@ -52,6 +61,54 @@ export function seedDemo() {
   const karthik = user('Karthik Rao', 'karthik@egan.in', 'Support Lead');
   const meera = user('Meera Joshi', 'meera@egan.in', 'Marketing Manager');
   const pulseBot = { ...user('Pulse Bot', 'bot@egan.in', 'Automation'), isBot: true };
+
+  const org = (u, position, department, employeeId, managerId, extra = {}) =>
+    Object.assign(u, { position, department, employeeId, managerId, ...extra });
+
+  org(owner, 'Founder & CEO', 'Leadership', 'EGN-0001', null, {
+    phone: '+91 90000 00001',
+    location: 'Hyderabad, India',
+    timezone: 'Asia/Kolkata',
+    bio: 'Started EGAN to make everyday home services reliable. Still reviews every customer complaint personally.',
+    joinedAt: '2021-04-01T00:00:00.000Z',
+  });
+  org(priya, 'Head of Operations', 'Operations', 'EGN-0002', owner.id, {
+    phone: '+91 90000 00002',
+    location: 'Bengaluru, India',
+    timezone: 'Asia/Kolkata',
+    bio: 'Runs branch operations and the service-person network across 111 cities.',
+    joinedAt: '2021-09-15T00:00:00.000Z',
+  });
+  org(rohit, 'Lead Engineer', 'Engineering', 'EGN-0003', priya.id, {
+    phone: '+91 90000 00003',
+    location: 'Bengaluru, India',
+    timezone: 'Asia/Kolkata',
+    bio: 'Owns the platform: catalogue, payments and realtime. Believes most bugs are missing tests.',
+    joinedAt: '2022-01-10T00:00:00.000Z',
+  });
+  org(sana, 'Product Designer', 'Design', 'EGN-0004', rohit.id, {
+    phone: '+91 90000 00004',
+    location: 'Pune, India',
+    timezone: 'Asia/Kolkata',
+    bio: 'Designs the customer app end to end. Ships prototypes before specs.',
+    joinedAt: '2022-06-20T00:00:00.000Z',
+  });
+  org(karthik, 'Support Lead', 'Customer Support', 'EGN-0005', priya.id, {
+    phone: '+91 90000 00005',
+    location: 'Hyderabad, India',
+    timezone: 'Asia/Kolkata',
+    bio: 'First responder on escalations. Keeps the refund macro honest.',
+    joinedAt: '2023-02-01T00:00:00.000Z',
+  });
+  org(meera, 'Marketing Manager', 'Marketing', 'EGN-0006', priya.id, {
+    phone: '+91 90000 00006',
+    location: 'Mumbai, India',
+    timezone: 'Asia/Kolkata',
+    bio: 'Runs launches and the brand system. Writes the newsletter nobody skips.',
+    joinedAt: '2023-05-08T00:00:00.000Z',
+  });
+  org(pulseBot, 'Automation', 'Engineering', 'EGN-BOT', rohit.id, { timezone: 'UTC' });
+
   db.users.push(owner, priya, rohit, sana, karthik, meera, pulseBot);
 
   const team = {

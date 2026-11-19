@@ -5,6 +5,15 @@ export interface User {
   name: string;
   email: string;
   title?: string;
+  position?: string;
+  department?: string;
+  employeeId?: string;
+  managerId?: string | null;
+  phone?: string;
+  location?: string;
+  timezone?: string;
+  bio?: string;
+  joinedAt?: string;
   avatarColor: string;
   avatarUrl?: string | null;
   status?: 'online' | 'away' | 'busy' | 'offline';
@@ -177,6 +186,31 @@ export interface InviteRow {
   expiresAt: string;
   usedBy: string[];
   link?: string;
+}
+
+export interface OrgNode {
+  user: User;
+  role: Role;
+  children: OrgNode[];
+}
+
+export interface Department {
+  name: string;
+  people: { user: User; role: Role }[];
+}
+
+export interface Hierarchy {
+  team: Team;
+  roots: OrgNode[];
+  departments: Department[];
+  total: number;
+}
+
+export interface UserProfile {
+  user: User;
+  manager: User | null;
+  reports: User[];
+  teamRoles: { teamId: string; teamName: string; role: Role; joinedAt: string }[];
 }
 
 export interface SearchResults {

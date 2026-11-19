@@ -219,6 +219,155 @@ app.get('/api/users', authRequired, wrap(async (req, res) => {
   res.json({ users: db.users.filter((u) => !u.isBot || true).map(publicUser) });
 }));
 
+/* ------------------------------------------------- profile & org hierarchy */
+
+// A user's full profile as seen by a teammate: identity, org placement, who
+// they report to, who reports to them, and where they sit in the team.
+app.get('/api/users/:userId', authRequired, wrap(async (req, res) => {
+  const target = db.users.find((u) => u.id === req.params.userId);
+  if (!target) throw fail(404, 'That person no longer exists.');
+
+  const sharedTeamIds = db.memberships
+    .filter((m) => m.userId === target.id && isMember(m.teamId, req.user.id))
+    .map((m) => m.teamId);
+  if (sharedTeamIds.length === 0 && target.id !== req.user.id) {
+    throw fail(403, 'You do not share a team with this person.');
+  }
+
+  const manager = target.managerId ? db.users.find((u) => u.id === target.managerId) : null;
+  const reports = db.users.filter((u) => u.managerId === target.id).map(publicUser);
+  const teamRoles = db.memberships
+    .filter((m) => m.userId === target.id && sharedTeamIds.includes(m.teamId))
+    .map((m) => ({
+      teamId: m.teamId,
+      teamName: db.teams.find((t) => t.id === m.teamId)?.name || '',
+      role: m.role,
+      joinedAt: m.joinedAt,
+    }));
+
+  res.json({
+    user: publicUser(target),
+    manager: manager ? publicUser(manager) : null,
+    reports,
+    teamRoles,
+  });
+}));
+
+// The reporting tree for a team. People without a manager (or whose manager is
+// not on this team) become roots, so nobody is ever dropped from the chart.
+app.get('/api/teams/:teamId/hierarchy', authRequired, wrap(async (req, res) => {
+  const team = db.teams.find((t) => t.id === req.params.teamId);
+  if (!team) throw fail(404, 'Team not found.');
+  requireMember(team.id, req.user.id);
+
+  const members = db.memberships
+    .filter((m) => m.teamId === team.id)
+    .map((m) => ({ membership: m, user: db.users.find((u) => u.id === m.userId) }))
+    .filter((row) => row.user);
+
+  const memberIds = new Set(members.map((r) => r.user.id));
+  const nodes = new Map(
+    members.map((r) => [r.user.id, {
+      user: publicUser(r.user),
+      role: r.membership.role,
+      children: [],
+    }]),
+  );
+
+  const roots = [];
+  for (const [userId, node] of nodes) {
+    const managerId = node.user.managerId;
+    if (managerId && memberIds.has(managerId) && managerId !== userId) {
+      nodes.get(managerId).children.push(node);
+    } else {
+      roots.push(node);
+    }
+  }
+
+  // Guard against a cycle (A reports to B who reports to A): such a pair has no
+  // root, so hoist every node that is unreachable back to the top level.
+  const reachable = new Set();
+  const walk = (node) => {
+    if (reachable.has(node.user.id)) return;
+    reachable.add(node.user.id);
+    node.children.forEach(walk);
+  };
+  roots.forEach(walk);
+  for (const [userId, node] of nodes) {
+    if (!reachable.has(userId)) roots.push(node);
+  }
+
+  const byDepartment = {};
+  for (const r of members) {
+    const dept = r.user.department || 'Unassigned';
+    byDepartment[dept] = byDepartment[dept] || [];
+    byDepartment[dept].push({ user: publicUser(r.user), role: r.membership.role });
+  }
+
+  res.json({
+    team: teamView(team, req.user.id),
+    roots,
+    departments: Object.entries(byDepartment)
+      .map(([name, people]) => ({ name, people }))
+      .sort((a, b) => a.name.localeCompare(b.name)),
+    total: members.length,
+  });
+}));
+
+// Update someone's org placement. Position/department/employeeId/managerId live
+// on the User row; role and permission changes go through the member route.
+app.patch('/api/teams/:teamId/members/:userId/org', authRequired, wrap(async (req, res) => {
+  const { teamId, userId } = req.params;
+  requireMember(teamId, req.user.id);
+  if (!membershipFor(teamId, userId)) throw fail(404, 'That person is not in this team.');
+
+  const isSelf = userId === req.user.id;
+  if (!isSelf) requirePermission(teamId, req.user.id, 'member.manage');
+
+  const target = db.users.find((u) => u.id === userId);
+  if (!target) throw fail(404, 'That person no longer exists.');
+
+  const { position, department, employeeId, managerId, phone, location, timezone, bio } = req.body || {};
+
+  if (typeof position === 'string') {
+    target.position = position;
+    target.title = position; // keep the legacy field in step
+  }
+  if (typeof department === 'string') target.department = department;
+  if (typeof employeeId === 'string') target.employeeId = employeeId;
+  if (typeof phone === 'string') target.phone = phone;
+  if (typeof location === 'string') target.location = location;
+  if (typeof timezone === 'string') target.timezone = timezone;
+  if (typeof bio === 'string') target.bio = bio;
+
+  if ('managerId' in (req.body || {})) {
+    const next = managerId || null;
+    if (next === userId) throw fail(400, 'Nobody can report to themselves.');
+    if (next) {
+      const manager = db.users.find((u) => u.id === next);
+      if (!manager) throw fail(400, 'That manager does not exist.');
+      if (!membershipFor(teamId, next)) throw fail(400, 'The manager must be in this team.');
+      // Refuse a cycle: walking up from the proposed manager must not reach us.
+      let cursor = manager;
+      const seen = new Set();
+      while (cursor?.managerId && !seen.has(cursor.id)) {
+        seen.add(cursor.id);
+        if (cursor.managerId === userId) throw fail(400, 'That would create a reporting loop.');
+        cursor = db.users.find((u) => u.id === cursor.managerId);
+      }
+    }
+    target.managerId = next;
+  }
+
+  persist();
+  const view = publicUser(target);
+  broadcastToUsers(
+    db.memberships.filter((m) => m.teamId === teamId).map((m) => m.userId),
+    { type: 'user.updated', user: view },
+  );
+  res.json({ user: view });
+}));
+
 /* -------------------------------------------------------------------- teams */
 
 app.get('/api/teams', authRequired, wrap(async (req, res) => {

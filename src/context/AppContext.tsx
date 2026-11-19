@@ -26,6 +26,7 @@ interface AppState {
   calls: CallRow[];
   notifications: NotificationRow[];
   online: Set<string>;
+  connection: 'online' | 'connecting' | 'offline';
   typing: Record<string, { name: string; at: number }[]>;
   unreadTotal: number;
   theme: 'dark' | 'light';
@@ -96,6 +97,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [calls, setCalls] = useState<CallRow[]>([]);
   const [notifications, setNotifications] = useState<NotificationRow[]>([]);
   const [online, setOnline] = useState<Set<string>>(new Set());
+  const [connection, setConnection] = useState<'online' | 'connecting' | 'offline'>('connecting');
   const [typing, setTyping] = useState<Record<string, { name: string; at: number }[]>>({});
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [theme, setThemeState] = useState<'dark' | 'light'>(
@@ -207,11 +209,20 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
     const connect = () => {
       if (closed) return;
-      socket = new WebSocket(wsUrl(token));
+      if (socket && (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING)) return;
+
+      try {
+        socket = new WebSocket(wsUrl(token));
+      } catch {
+        scheduleReconnect();
+        return;
+      }
       socketRef.current = socket;
+      setConnection('connecting');
 
       socket.onopen = () => {
         retry = 0;
+        setConnection('online');
       };
       socket.onmessage = (event) => {
         let data: any;
@@ -304,31 +315,80 @@ export function AppProvider({ children }: { children: ReactNode }) {
       };
       socket.onclose = () => {
         if (closed) return;
-        retry = Math.min(retry + 1, 6);
-        timer = window.setTimeout(connect, Math.min(1000 * 2 ** retry, 15000));
+        socketRef.current = null;
+        setConnection('offline');
+        scheduleReconnect();
       };
       socket.onerror = () => socket?.close();
     };
+
+    function scheduleReconnect() {
+      if (closed) return;
+      retry = Math.min(retry + 1, 7);
+      window.clearTimeout(timer);
+      // Backoff tops out at 10s so a phone waking from sleep recovers quickly.
+      timer = window.setTimeout(connect, Math.min(600 * 2 ** retry, 10000));
+    }
+
+    // A backgrounded tab has its socket dropped by the OS/browser. Retrying
+    // blindly is not enough — reconnect the moment the tab is visible again,
+    // and drop the stale socket so `connect` is not skipped by its guard.
+    const onVisible = () => {
+      if (document.visibilityState !== 'visible' || closed) return;
+      const state = socket?.readyState;
+      if (state === WebSocket.OPEN) return;
+      if (state === WebSocket.CONNECTING) return;
+      window.clearTimeout(timer);
+      retry = 0;
+      socket = null;
+      connect();
+    };
+    const onOnline = () => onVisible();
+
+    document.addEventListener('visibilitychange', onVisible);
+    window.addEventListener('online', onOnline);
+    window.addEventListener('focus', onVisible);
 
     connect();
     return () => {
       closed = true;
       window.clearTimeout(timer);
+      document.removeEventListener('visibilitychange', onVisible);
+      window.removeEventListener('online', onOnline);
+      window.removeEventListener('focus', onVisible);
       socket?.close();
       socketRef.current = null;
     };
   }, [token, user?.id, applyIncomingMessage, refreshTeam, toast]);
 
-  // Reconnect promptly when the tab becomes visible again.
+  // Polling fallback: when the socket is not open, refresh the open channel on a
+  // timer so a dropped connection degrades to "slightly delayed" instead of
+  // "chat is dead". Deliberately skipped while the socket is healthy so we do
+  // not double up on traffic.
   useEffect(() => {
-    const onVisible = () => {
-      if (document.visibilityState === 'visible' && socketRef.current?.readyState === WebSocket.CLOSED) {
-        window.dispatchEvent(new Event('pulse:reconnect'));
+    if (!token) return;
+    const tick = async () => {
+      if (document.visibilityState !== 'visible') return;
+      if (socketRef.current?.readyState === WebSocket.OPEN) return;
+      const channelId = currentChannel.current;
+      if (!channelId) return;
+      try {
+        const { messages: rows } = await api.messages(channelId, { limit: 60 });
+        setMessages((prev) => {
+          const existing = prev[channelId] || [];
+          const pending = existing.filter((m) => m.pending);
+          const seen = new Set(existing.map((m) => m.id));
+          const merged = rows.filter((m) => !seen.has(m.id));
+          if (merged.length === 0 && pending.length === 0) return prev;
+          return { ...prev, [channelId]: [...existing.filter((m) => !m.pending), ...merged, ...pending] };
+        });
+      } catch {
+        /* the socket reconnect loop owns recovery */
       }
     };
-    document.addEventListener('visibilitychange', onVisible);
-    return () => document.removeEventListener('visibilitychange', onVisible);
-  }, []);
+    const timer = window.setInterval(tick, 6000);
+    return () => window.clearInterval(timer);
+  }, [token]);
 
   /* ----------------------------------------------------------------- auth */
 
@@ -359,6 +419,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }, [loadTeams, refreshTeam]);
 
   const logout = useCallback(() => {
+    setConnection('offline');
     tokenStore.clear();
     socketRef.current?.close();
     setToken(null);
@@ -594,6 +655,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     calls,
     notifications,
     online,
+    connection,
     typing,
     unreadTotal,
     theme,

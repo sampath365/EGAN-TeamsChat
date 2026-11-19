@@ -9,6 +9,7 @@ import { useApp } from '@/context/AppContext';
 import { Avatar, IconButton } from './ui';
 import { RichText } from './RichText';
 import { EMOJIS } from './Composer';
+import { PersonCard } from './PersonCard';
 
 interface MessageListProps {
   channelId: string;
@@ -28,6 +29,7 @@ export function MessageList({ channelId, messages, members, onOpenThread }: Mess
   const [menuFor, setMenuFor] = useState<string | null>(null);
   const [pickerFor, setPickerFor] = useState<string | null>(null);
   const [pinnedIds, setPinnedIds] = useState<Set<string>>(() => new Set(JSON.parse(localStorage.getItem('egan.pulse.pins') || '[]')));
+  const [profileId, setProfileId] = useState<string | null>(null);
 
   const mentionNames = useMemo(() => members.map((m) => m.user?.name || '').filter(Boolean), [members]);
   const memberById = useMemo(() => Object.fromEntries(members.map((m) => [m.userId, m.user])), [members]);
@@ -95,7 +97,9 @@ export function MessageList({ channelId, messages, members, onOpenThread }: Mess
                 <div className="flex gap-2.5">
                   <div className="w-9 shrink-0 pt-0.5">
                     {!grouped ? (
-                      <Avatar name={author.name} color={author.avatarColor} url={author.avatarUrl} size={36} />
+                      <button type="button" onClick={() => setProfileId(m.authorId)} aria-label={`Open ${author.name}'s profile`} className="rounded-full transition hover:scale-105">
+                        <Avatar name={author.name} color={author.avatarColor} url={author.avatarUrl} size={36} />
+                      </button>
                     ) : (
                       <span className="hidden select-none pt-1 text-[10px] text-muted group-hover:inline">{clockTime(m.createdAt)}</span>
                     )}
@@ -104,7 +108,14 @@ export function MessageList({ channelId, messages, members, onOpenThread }: Mess
                   <div className="min-w-0 flex-1">
                     {!grouped && (
                       <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
-                        <span className="text-[13.5px] font-bold">{author.name}</span>
+                        <button type="button" onClick={() => setProfileId(m.authorId)} className="text-[13.5px] font-bold transition hover:text-brand-600 hover:underline dark:hover:text-brand-300">
+                          {author.name}
+                        </button>
+                        {author.position && (
+                          <span className="hidden rounded bg-ink-100 px-1.5 py-0.5 text-[9.5px] font-bold uppercase tracking-wide text-ink-500 dark:bg-white/10 dark:text-ink-400 sm:inline">
+                            {author.position}
+                          </span>
+                        )}
                         {author.isBot && <span className="rounded bg-brand-50 px-1.5 text-[9.5px] font-bold uppercase text-brand-600 dark:bg-brand-500/20 dark:text-brand-300">bot</span>}
                         <span className="text-[11px] text-muted">{clockTime(m.createdAt)}</span>
                         {pinned && <Pin size={11} className="text-amber-500" />}
@@ -269,6 +280,8 @@ export function MessageList({ channelId, messages, members, onOpenThread }: Mess
         })}
         <div ref={bottomRef} className="h-2" />
       </div>
+
+      <PersonCard userId={profileId} open={!!profileId} onClose={() => setProfileId(null)} />
     </div>
   );
 }

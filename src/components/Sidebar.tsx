@@ -3,6 +3,7 @@ import { Link, NavLink, useLocation, useNavigate } from 'react-router-dom';
 import {
   Bell, CalendarClock, ChevronDown, Hash, KanbanSquare, Lock, LogOut, MessageSquarePlus, Moon,
   Plus, Search, Settings, Sun, Users, Video, CheckSquare, FolderOpen, StickyNote, Sparkles, X,
+  Network, WifiOff,
 } from 'lucide-react';
 import { useApp } from '@/context/AppContext';
 import { cn } from '@/lib/utils';
@@ -12,6 +13,7 @@ export function Sidebar({ onOpenPalette, onClose, mobile }: { onOpenPalette: () 
   const {
     teams, teamId, team, channels, members, selectTeam, createTeam, createChannel, can, logout, user,
     notifications, unreadTotal, theme, setTheme, online, refreshNotifications, markNotificationsRead,
+    connection,
   } = useApp();
   const navigate = useNavigate();
   const location = useLocation();
@@ -122,6 +124,7 @@ export function Sidebar({ onOpenPalette, onClose, mobile }: { onOpenPalette: () 
           <NavItem to="/meetings" icon={<Video size={15} />} label="Meetings" onClick={onClose} />
           <NavItem to="/tasks" icon={<KanbanSquare size={15} />} label="Tasks" onClick={onClose} />
           <NavItem to="/people" icon={<Users size={15} />} label="People" badge={members.length} onClick={onClose} />
+          <NavItem to="/org" icon={<Network size={15} />} label="Company hierarchy" onClick={onClose} />
         </Section>
 
         <div className="mb-1 mt-3 flex items-center justify-between px-2">
@@ -150,6 +153,13 @@ export function Sidebar({ onOpenPalette, onClose, mobile }: { onOpenPalette: () 
           <p className="px-2 py-3 text-[12px] text-muted">No channels yet.</p>
         )}
       </nav>
+
+      {connection !== 'online' && (
+        <div className="mx-2 mb-1 flex items-center gap-1.5 rounded-lg bg-amber-50 px-2 py-1.5 text-[10.5px] font-semibold text-amber-800 dark:bg-amber-500/15 dark:text-amber-300">
+          <WifiOff size={11} className="shrink-0" />
+          {connection === 'connecting' ? 'Connecting to live updates…' : 'Reconnecting — messages may be delayed'}
+        </div>
+      )}
 
       {/* footer */}
       <div className="relative border-t p-2.5 bordered">

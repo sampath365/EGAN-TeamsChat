@@ -1,6 +1,6 @@
 import type {
-  CallRow, Channel, FileRow, InviteRow, Message, Note, NotificationRow, SearchResults,
-  TaskItem, Team, TeamBundle, User,
+  CallRow, Channel, FileRow, Hierarchy, InviteRow, Message, Note, NotificationRow,
+  SearchResults, TaskItem, Team, TeamBundle, User, UserProfile,
 } from './types';
 
 const TOKEN_KEY = 'egan.pulse.token';
@@ -63,6 +63,10 @@ export const api = {
   updateMe: (input: Partial<Pick<User, 'name' | 'title' | 'status' | 'statusText' | 'avatarUrl'>>) =>
     patch<{ user: User }>('/auth/me', input),
   users: () => get<{ users: User[] }>('/users'),
+  profile: (userId: string) => get<UserProfile>(`/users/${userId}`),
+  hierarchy: (teamId: string) => get<Hierarchy>(`/teams/${teamId}/hierarchy`),
+  updateOrg: (teamId: string, userId: string, input: Partial<Pick<User, 'position' | 'department' | 'employeeId' | 'managerId' | 'phone' | 'location' | 'timezone' | 'bio'>>) =>
+    patch<{ user: User }>(`/teams/${teamId}/members/${userId}/org`, input),
 
   // teams
   teams: () => get<{ teams: Team[] }>('/teams'),

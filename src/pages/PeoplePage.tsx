@@ -5,6 +5,7 @@ import { api } from '@/lib/api';
 import type { Membership, Role } from '@/lib/types';
 import { cn, copyText, timeAgo } from '@/lib/utils';
 import { Avatar, Badge, IconButton, Modal, Spinner } from '@/components/ui';
+import { PersonCard } from '@/components/PersonCard';
 
 const ROLE_TONE: Record<string, 'brand' | 'violet' | 'neutral' | 'amber'> = {
   owner: 'amber', admin: 'violet', member: 'brand', guest: 'neutral', bot: 'neutral',
@@ -18,6 +19,7 @@ export function PeoplePage() {
   const [roleFilter, setRoleFilter] = useState<'all' | Role>('all');
   const [managing, setManaging] = useState<Membership | null>(null);
   const [inviteOpen, setInviteOpen] = useState(false);
+  const [profileId, setProfileId] = useState<string | null>(null);
 
   const filtered = useMemo(() => {
     const q = query.toLowerCase();
@@ -30,6 +32,16 @@ export function PeoplePage() {
 
   const onlineCount = members.filter((m) => online.has(m.userId)).length;
 
+  const grouped = useMemo(() => {
+    const map = new Map<string, typeof filtered>();
+    for (const m of filtered) {
+      const dept = m.user?.department || 'Unassigned';
+      if (!map.has(dept)) map.set(dept, []);
+      map.get(dept)!.push(m);
+    }
+    return [...map.entries()].sort((a, b) => a[0].localeCompare(b[0]));
+  }, [filtered]);
+
   return (
     <div className="h-full overflow-y-auto">
       <div className="mx-auto max-w-5xl px-4 py-5 sm:px-6">
@@ -37,6 +49,9 @@ export function PeoplePage() {
           <div>
             <h1 className="text-[20px] font-black">People</h1>
             <p className="mt-0.5 text-[12.5px] text-muted">{members.length} members · {onlineCount} online now</p>
+            <a href="#/org" className="mt-1 inline-flex items-center gap-1 text-[11.5px] font-bold text-brand-600 hover:underline dark:text-brand-300">
+              View company hierarchy →
+            </a>
           </div>
           {can('member.invite') && (
             <button type="button" className="btn-primary" onClick={() => setInviteOpen(true)}>
@@ -67,19 +82,30 @@ export function PeoplePage() {
           </div>
         </div>
 
-        <div className="grid gap-2 sm:grid-cols-2">
-          {filtered.map((m) => (
+        <div className="space-y-4">
+          {grouped.map(([dept, people]) => (
+            <section key={dept}>
+              <p className="mb-1.5 flex items-center gap-1.5 px-1 text-[10.5px] font-bold uppercase tracking-wider text-muted">
+                {dept}
+                <span className="rounded-full bg-ink-100 px-1.5 text-[9.5px] dark:bg-white/10">{people.length}</span>
+              </p>
+              <div className="grid gap-2 sm:grid-cols-2">
+          {people.map((m) => (
             <div key={m.userId} className="card flex items-center gap-3 p-3">
-              <Avatar name={m.user.name} color={m.user.avatarColor} url={m.user.avatarUrl} size={42} online={online.has(m.userId)} />
-              <div className="min-w-0 flex-1">
+              <button type="button" onClick={() => setProfileId(m.userId)} aria-label={`Open ${m.user.name}'s profile`}>
+                <Avatar name={m.user.name} color={m.user.avatarColor} url={m.user.avatarUrl} size={42} online={online.has(m.userId)} />
+              </button>
+              <button type="button" onClick={() => setProfileId(m.userId)} className="min-w-0 flex-1 text-left">
                 <div className="flex items-center gap-1.5">
                   <p className="truncate text-[13px] font-bold">{m.user.name}</p>
                   {m.role === 'owner' && <Crown size={12} className="shrink-0 text-amber-500" />}
                   <Badge tone={ROLE_TONE[m.role] || 'neutral'}>{m.role}</Badge>
                 </div>
-                <p className="truncate text-[11px] text-muted">{m.user.title || '—'}</p>
-                <p className="truncate text-[10.5px] text-muted">{m.user.email}</p>
-              </div>
+                <p className="truncate text-[11px] font-semibold text-brand-600 dark:text-brand-300">{m.user.position || m.user.title || '—'}</p>
+                <p className="truncate text-[10.5px] text-muted">
+                  {m.user.department ? `${m.user.department} · ` : ''}{m.user.email}
+                </p>
+              </button>
               <div className="flex shrink-0 items-center gap-1">
                 {m.permissions?.length > 0 && (
                   <span title={`${m.permissions.length} extra permissions`} className="text-[10px] font-bold text-violet-600 dark:text-violet-300">
@@ -93,6 +119,9 @@ export function PeoplePage() {
                 )}
               </div>
             </div>
+          ))}
+              </div>
+            </section>
           ))}
         </div>
         {filtered.length === 0 && <p className="py-10 text-center text-[12.5px] text-muted">No one matches that search.</p>}
@@ -109,6 +138,8 @@ export function PeoplePage() {
       )}
 
       <InviteModal open={inviteOpen} onClose={() => setInviteOpen(false)} teamId={team?.id || ''} />
+
+      <PersonCard userId={profileId} open={!!profileId} onClose={() => setProfileId(null)} />
     </div>
   );
 }

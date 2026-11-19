@@ -18,6 +18,8 @@ import { PeoplePage } from './pages/PeoplePage';
 import { ThreadsPage } from './pages/ThreadsPage';
 import { SettingsPage } from './pages/SettingsPage';
 import { JoinPage } from './pages/JoinPage';
+import { ProfilePage } from './pages/ProfilePage';
+import { OrgChartPage } from './pages/OrgChartPage';
 
 export default function App() {
   const { ready, user, channels, unreadTotal, theme } = useApp();
@@ -122,9 +124,11 @@ export default function App() {
             <Route path="/meetings" element={<MeetingsPage />} />
             <Route path="/meeting/:callId" element={<MeetingPage />} />
             <Route path="/people" element={<PeoplePage />} />
+            <Route path="/profile" element={<ProfilePage />} />
+            <Route path="/profile/:userId" element={<ProfilePage />} />
+            <Route path="/org" element={<OrgChartPage />} />
             <Route path="/threads" element={<ThreadsPage />} />
             <Route path="/settings" element={<SettingsPage />} />
-            <Route path="/profile" element={<SettingsPage />} />
             <Route path="/join/:code" element={<JoinPage />} />
             <Route path="*" element={<Navigate to="/home" replace />} />
           </Routes>

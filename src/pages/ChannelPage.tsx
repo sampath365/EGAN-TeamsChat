@@ -12,6 +12,7 @@ import { Avatar, Badge, EmptyState, IconButton, Modal, Spinner, Tabs } from '@/c
 import { MessageList } from '@/components/MessageList';
 import { Composer } from '@/components/Composer';
 import { RichText } from '@/components/RichText';
+import { PersonCard } from '@/components/PersonCard';
 
 type Tab = 'chat' | 'files' | 'notes';
 
@@ -32,6 +33,7 @@ export function ChannelPage() {
   const [topicDraft, setTopicDraft] = useState('');
   const [callOpen, setCallOpen] = useState(false);
   const [callTitle, setCallTitle] = useState('');
+  const [profileId, setProfileId] = useState<string | null>(null);
 
   const channel = channels.find((c) => c.id === channelId);
   const list = messages[channelId] || [];
@@ -115,7 +117,11 @@ export function ChannelPage() {
               {channel.memberIds.slice(0, 3).map((id) => {
                 const m = members.find((x) => x.userId === id);
                 if (!m) return null;
-                return <Avatar key={id} name={m.user.name} color={m.user.avatarColor} size={22} online={online.has(id)} ring />;
+                return (
+                  <button key={id} type="button" onClick={() => setProfileId(id)} aria-label={`Open ${m.user.name}'s profile`} className="rounded-full transition hover:z-10 hover:scale-110">
+                    <Avatar name={m.user.name} color={m.user.avatarColor} size={22} online={online.has(id)} ring />
+                  </button>
+                );
               })}
               {channel.memberIds.length > 3 && <span className="pl-2 text-[11px] font-semibold text-muted">+{channel.memberIds.length - 3}</span>}
             </div>
@@ -209,13 +215,18 @@ export function ChannelPage() {
               const m = members.find((x) => x.userId === id);
               if (!m) return null;
               return (
-                <div key={id} className="flex items-center gap-2 rounded-lg px-1.5 py-1.5 hover:bg-ink-100 dark:hover:bg-white/[0.05]">
+                <button
+                  key={id}
+                  type="button"
+                  onClick={() => setProfileId(id)}
+                  className="flex w-full items-center gap-2 rounded-lg px-1.5 py-1.5 text-left transition hover:bg-ink-100 dark:hover:bg-white/[0.05]"
+                >
                   <Avatar name={m.user.name} color={m.user.avatarColor} size={26} online={online.has(id)} />
                   <div className="min-w-0 flex-1">
                     <p className="truncate text-[12.5px] font-semibold">{m.user.name}</p>
-                    <p className="truncate text-[10.5px] text-muted">{m.user.title || m.role}</p>
+                    <p className="truncate text-[10.5px] text-muted">{m.user.position || m.user.title || m.role}</p>
                   </div>
-                </div>
+                </button>
               );
             })}
           </div>
@@ -223,6 +234,8 @@ export function ChannelPage() {
       )}
 
       {thread && <ThreadPanel parent={thread} onClose={() => setThread(null)} members={members} />}
+
+      <PersonCard userId={profileId} open={!!profileId} onClose={() => setProfileId(null)} />
 
       <Modal
         open={addPeopleOpen}
