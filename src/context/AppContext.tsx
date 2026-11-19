@@ -4,8 +4,8 @@ import {
 import type { ReactNode } from 'react';
 import { api, tokenStore, wsUrl } from '@/lib/api';
 import type {
-  CallRow, Channel, FileRow, Message, Membership, Note, NotificationRow, PermissionDef,
-  TaskItem, Team, User,
+  CallRow, Channel, DirectMessage, FileRow, Message, Membership, Note, NotificationRow,
+  PermissionDef, TaskItem, Team, User,
 } from '@/lib/types';
 
 type Toast = { id: string; title: string; body?: string; tone?: 'info' | 'success' | 'error' };
@@ -61,7 +61,10 @@ interface AppState {
 
   channelFiles: (channelId: string) => Promise<FileRow[]>;
 
-  createCall: (input: { title?: string; channelId?: string | null; scheduledAt?: string | null }) => Promise<CallRow>;
+  createCall: (input: { title?: string; channelId?: string | null; scheduledAt?: string | null; inviteeIds?: string[] | null }) => Promise<CallRow>;
+  dms: DirectMessage[];
+  openDm: (userId: string) => Promise<Channel>;
+  refreshDms: () => Promise<void>;
   updateCall: (callId: string, input: { status?: string }) => Promise<void>;
 
   can: (permission: string) => boolean;
@@ -93,6 +96,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [permissionDefs, setPermissionDefs] = useState<PermissionDef[]>([]);
   const [myPermissions, setMyPermissions] = useState<string[]>([]);
   const [messages, setMessages] = useState<Record<string, Message[]>>({});
+  const [dms, setDms] = useState<DirectMessage[]>([]);
   const [tasks, setTasks] = useState<TaskItem[]>([]);
   const [calls, setCalls] = useState<CallRow[]>([]);
   const [notifications, setNotifications] = useState<NotificationRow[]>([]);
@@ -148,7 +152,24 @@ export function AppProvider({ children }: { children: ReactNode }) {
     ]);
     setCalls(callRows);
     setTasks(taskRows);
+    api.dms().then(({ dms: rows }) => setDms(rows)).catch(() => undefined);
   }, [teamId, team?.id]);
+
+  const refreshDms = useCallback(async () => {
+    try {
+      const { dms: rows } = await api.dms();
+      setDms(rows);
+    } catch {
+      /* non-fatal */
+    }
+  }, []);
+
+  const openDm = useCallback(async (userId: string) => {
+    const { channel } = await api.openDm(userId);
+    setChannels((prev) => (prev.some((c) => c.id === channel.id) ? prev : [...prev, channel]));
+    await refreshDms();
+    return channel;
+  }, [refreshDms]);
 
   const refreshNotifications = useCallback(async () => {
     try {
@@ -287,6 +308,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
             break;
           case 'channel.created':
             setChannels((prev) => (prev.some((c) => c.id === data.channel.id) ? prev : [...prev, data.channel]));
+            if (data.channel.kind === 'dm') api.dms().then(({ dms: rows }) => setDms(rows)).catch(() => undefined);
             break;
           case 'channel.updated':
             setChannels((prev) => prev.map((c) => (c.id === data.channel.id ? { ...c, ...data.channel } : c)));
@@ -430,6 +452,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setMembers([]);
     setMessages({});
     setTasks([]);
+    setDms([]);
     setCalls([]);
     setNotifications([]);
   }, []);
@@ -607,7 +630,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   /* ------------------------------------------------------------- meetings */
 
-  const createCall = useCallback(async (input: { title?: string; channelId?: string | null; scheduledAt?: string | null }) => {
+  const createCall = useCallback(async (input: { title?: string; channelId?: string | null; scheduledAt?: string | null; inviteeIds?: string[] | null }) => {
     if (!teamId) throw new Error('No team selected');
     const { call } = await api.createCall(teamId, input);
     setCalls((prev) => (prev.some((c) => c.id === call.id) ? prev : [call, ...prev]));
@@ -684,6 +707,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
     updateNote,
     channelFiles,
     createCall,
+    dms,
+    openDm,
+    refreshDms,
     updateCall,
     can,
     toast,

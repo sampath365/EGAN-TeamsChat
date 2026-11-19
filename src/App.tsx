@@ -20,6 +20,7 @@ import { SettingsPage } from './pages/SettingsPage';
 import { JoinPage } from './pages/JoinPage';
 import { ProfilePage } from './pages/ProfilePage';
 import { OrgChartPage } from './pages/OrgChartPage';
+import { ReportsPage } from './pages/ReportsPage';
 
 export default function App() {
   const { ready, user, channels, unreadTotal, theme } = useApp();
@@ -127,6 +128,7 @@ export default function App() {
             <Route path="/profile" element={<ProfilePage />} />
             <Route path="/profile/:userId" element={<ProfilePage />} />
             <Route path="/org" element={<OrgChartPage />} />
+            <Route path="/reports" element={<ReportsPage />} />
             <Route path="/threads" element={<ThreadsPage />} />
             <Route path="/settings" element={<SettingsPage />} />
             <Route path="/join/:code" element={<JoinPage />} />

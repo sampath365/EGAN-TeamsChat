@@ -428,6 +428,80 @@ app.patch('/api/teams/:teamId', authRequired, wrap(async (req, res) => {
   res.json({ team: teamView(team, req.user.id) });
 }));
 
+/* -------------------------------------------------------- direct messages */
+
+// A DM is a channel of kind 'dm' with exactly two members. It is created on
+// first use and reused afterwards, so two people never end up with a dozen
+// separate threads.
+app.get('/api/dms', authRequired, wrap(async (req, res) => {
+  const mine = db.channels.filter(
+    (c) => c.kind === 'dm'
+      && !c.archived
+      && db.channelMembers.some((cm) => cm.channelId === c.id && cm.userId === req.user.id),
+  );
+
+  const rows = mine.map((c) => {
+    const partnerId = db.channelMembers
+      .filter((cm) => cm.channelId === c.id && cm.userId !== req.user.id)
+      .map((cm) => cm.userId)[0];
+    const partner = db.users.find((u) => u.id === partnerId) || null;
+    return {
+      channel: channelView(c, req.user.id),
+      partner: publicUser(partner),
+    };
+  });
+
+  rows.sort((a, b) => {
+    const at = a.channel.lastMessage?.createdAt || a.channel.createdAt;
+    const bt = b.channel.lastMessage?.createdAt || b.channel.createdAt;
+    return bt.localeCompare(at);
+  });
+
+  res.json({ dms: rows });
+}));
+
+// Get or create the DM with one other person.
+app.post('/api/dms/:userId', authRequired, wrap(async (req, res) => {
+  const partner = db.users.find((u) => u.id === req.params.userId);
+  if (!partner) throw fail(404, 'That person no longer exists.');
+  if (partner.id === req.user.id) throw fail(400, 'You cannot message yourself.');
+
+  const sharedTeam = db.memberships.find(
+    (m) => m.userId === partner.id && isMember(m.teamId, req.user.id),
+  );
+  if (!sharedTeam) throw fail(403, 'You do not share a team with this person.');
+
+  const existing = db.channels.find((c) => {
+    if (c.kind !== 'dm' || c.teamId !== sharedTeam.teamId) return false;
+    const ids = db.channelMembers.filter((cm) => cm.channelId === c.id).map((cm) => cm.userId);
+    return ids.length === 2 && ids.includes(req.user.id) && ids.includes(partner.id);
+  });
+
+  if (existing) {
+    return res.json({ channel: channelView(existing, req.user.id), partner: publicUser(partner), created: false });
+  }
+
+  const ch = {
+    id: id('c'),
+    teamId: sharedTeam.teamId,
+    name: `dm-${[req.user.id.slice(-6), partner.id.slice(-6)].sort().join('-')}`,
+    topic: '',
+    kind: 'dm',
+    isPrivate: true,
+    createdBy: req.user.id,
+    createdAt: now(),
+    archived: false,
+  };
+  db.channels.push(ch);
+  db.channelMembers.push({ id: id('cm'), channelId: ch.id, userId: req.user.id });
+  db.channelMembers.push({ id: id('cm'), channelId: ch.id, userId: partner.id });
+  persist();
+
+  const view = channelView(ch, req.user.id);
+  broadcastToUsers([req.user.id, partner.id], { type: 'channel.created', channel: view });
+  res.json({ channel: view, partner: publicUser(partner), created: true });
+}));
+
 /* ----------------------------------------------------------------- members */
 
 app.patch('/api/teams/:teamId/members/:userId', authRequired, wrap(async (req, res) => {
@@ -827,6 +901,90 @@ app.delete('/api/tasks/:taskId', authRequired, wrap(async (req, res) => {
   res.json({ ok: true });
 }));
 
+/* ---------------------------------------------------------------- reports */
+
+// A team-level activity report. Deliberately computed from the rows we already
+// have (no fabricated numbers): tasks assigned/open/done, messages sent, files
+// uploaded, meetings hosted, and the reporting line for each person.
+app.get('/api/teams/:teamId/reports', authRequired, wrap(async (req, res) => {
+  const team = db.teams.find((t) => t.id === req.params.teamId);
+  if (!team) throw fail(404, 'Team not found.');
+  requireMember(team.id, req.user.id);
+
+  const memberships = db.memberships.filter((m) => m.teamId === team.id);
+  const teamChannelIds = new Set(db.channels.filter((c) => c.teamId === team.id).map((c) => c.id));
+  const teamTasks = db.tasks.filter((t) => t.teamId === team.id);
+  const teamCalls = db.calls.filter((c) => c.teamId === team.id);
+  const teamFiles = db.files.filter((f) => f.teamId === team.id);
+
+  const people = memberships.map((m) => {
+    const u = db.users.find((x) => x.id === m.userId);
+    const assigned = teamTasks.filter((t) => t.assigneeId === m.userId);
+    const open = assigned.filter((t) => t.status !== 'done');
+    const done = assigned.filter((t) => t.status === 'done');
+    const overdue = open.filter((t) => t.dueDate && new Date(`${t.dueDate}T23:59:59`).getTime() < Date.now());
+    const sent = db.messages.filter((msg) => msg.authorId === m.userId && teamChannelIds.has(msg.channelId) && !msg.deletedAt);
+    const hosted = teamCalls.filter((c) => c.hostId === m.userId);
+    const uploads = teamFiles.filter((f) => f.uploaderId === m.userId);
+    return {
+      user: publicUser(u),
+      role: m.role,
+      tasks: { total: assigned.length, open: open.length, done: done.length, overdue: overdue.length },
+      messages: sent.length,
+      meetingsHosted: hosted.length,
+      filesUploaded: uploads.length,
+      lastActiveAt: sent.length ? sent[sent.length - 1].createdAt : null,
+    };
+  });
+
+  const totals = {
+    people: people.length,
+    tasks: teamTasks.length,
+    tasksOpen: teamTasks.filter((t) => t.status !== 'done').length,
+    tasksDone: teamTasks.filter((t) => t.status === 'done').length,
+    tasksOverdue: teamTasks.filter(
+      (t) => t.status !== 'done' && t.dueDate && new Date(`${t.dueDate}T23:59:59`).getTime() < Date.now(),
+    ).length,
+    messages: db.messages.filter((msg) => teamChannelIds.has(msg.channelId) && !msg.deletedAt).length,
+    meetings: teamCalls.length,
+    files: teamFiles.length,
+  };
+
+  // Workload by department, so a manager can see where the queue sits.
+  const byDepartment = {};
+  for (const p of people) {
+    const dept = p.user?.department || 'Unassigned';
+    byDepartment[dept] = byDepartment[dept] || { name: dept, people: 0, open: 0, done: 0, messages: 0 };
+    byDepartment[dept].people += 1;
+    byDepartment[dept].open += p.tasks.open;
+    byDepartment[dept].done += p.tasks.done;
+    byDepartment[dept].messages += p.messages;
+  }
+
+  const reportingLines = memberships
+    .map((m) => {
+      const u = db.users.find((x) => x.id === m.userId);
+      const manager = u?.managerId ? db.users.find((x) => x.id === u.managerId) : null;
+      return {
+        userId: m.userId,
+        name: u?.name || '',
+        position: u?.position || '',
+        managerId: manager?.id || null,
+        managerName: manager?.name || null,
+      };
+    })
+    .filter((r) => r.managerId);
+
+  res.json({
+    team: teamView(team, req.user.id),
+    generatedAt: now(),
+    totals,
+    people: people.sort((a, b) => b.tasks.open - a.tasks.open || (a.user?.name || '').localeCompare(b.user?.name || '')),
+    departments: Object.values(byDepartment).sort((a, b) => b.open - a.open),
+    reportingLines,
+  });
+}));
+
 /* -------------------------------------------------------------------- notes */
 
 app.get('/api/channels/:channelId/notes', authRequired, wrap(async (req, res) => {
@@ -917,7 +1075,19 @@ app.get('/api/teams/:teamId/calls', authRequired, wrap(async (req, res) => {
 app.post('/api/teams/:teamId/calls', authRequired, wrap(async (req, res) => {
   requireMember(req.params.teamId, req.user.id);
   requirePermission(req.params.teamId, req.user.id, 'meeting.host');
-  const { title = 'Instant meeting', channelId = null, scheduledAt = null } = req.body || {};
+  const {
+    title = 'Instant meeting', channelId = null, scheduledAt = null, inviteeIds = null,
+  } = req.body || {};
+
+  // A 1:1 call passes inviteeIds; a channel/team meeting passes none and rings
+  // everybody in the team. An empty array is treated as "everyone" so a stale
+  // client cannot accidentally create a meeting that notifies nobody.
+  const teamMemberIds = db.memberships.filter((m) => m.teamId === req.params.teamId).map((m) => m.userId);
+  const invitees = Array.isArray(inviteeIds) && inviteeIds.length > 0
+    ? inviteeIds.filter((uid) => teamMemberIds.includes(uid) && uid !== req.user.id)
+    : teamMemberIds.filter((uid) => uid !== req.user.id);
+
+  const isDirect = Array.isArray(inviteeIds) && inviteeIds.length === 1;
   const call = {
     id: id('call'),
     teamId: req.params.teamId,
@@ -929,17 +1099,18 @@ app.post('/api/teams/:teamId/calls', authRequired, wrap(async (req, res) => {
     createdAt: now(),
     startedAt: scheduledAt ? null : now(),
     participants: [],
+    inviteeIds: invitees,
+    isDirect,
   };
   db.calls.push(call);
   persist();
-  const memberIds = db.memberships.filter((m) => m.teamId === call.teamId).map((m) => m.userId);
-  broadcastToUsers(memberIds, { type: 'call.created', call });
-  for (const uid of memberIds) {
-    if (uid === req.user.id) continue;
+
+  broadcastToUsers([...new Set([req.user.id, ...invitees])], { type: 'call.created', call });
+  for (const uid of invitees) {
     notify(uid, {
       kind: 'meeting',
-      title: `${req.user.name} started “${title}”`,
-      body: 'Join the meeting from the Meetings tab.',
+      title: isDirect ? `${req.user.name} is calling you` : `${req.user.name} started “${title}”`,
+      body: isDirect ? 'Answer from the notification.' : 'Join the meeting from the Meetings tab.',
       link: `#/meeting/${call.id}`,
     });
   }

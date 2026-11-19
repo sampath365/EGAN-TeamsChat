@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import {
   ArrowLeft, Briefcase, Building2, CalendarDays, Check, Clock, Mail, MapPin, MessageSquare,
-  Network, Pencil, Phone, Save, UserRound, Users, X, Crown,
+  Network, Pencil, Phone, Save, UserRound, Users, X, Crown, Video,
 } from 'lucide-react';
 import { useApp } from '@/context/AppContext';
 import { api } from '@/lib/api';
@@ -21,7 +21,7 @@ const DEPARTMENTS = [
 
 export function ProfilePage() {
   const { userId } = useParams();
-  const { user, team, members, can, online, toast, refreshTeam, updateProfile } = useApp();
+  const { user, team, members, can, online, toast, refreshTeam, updateProfile, openDm, createCall } = useApp();
   const navigate = useNavigate();
 
   const targetId = userId || user?.id || '';
@@ -30,6 +30,7 @@ export function ProfilePage() {
   const [loading, setLoading] = useState(true);
   const [editing, setEditing] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [acting, setActing] = useState<'dm' | 'call' | null>(null);
   const [form, setForm] = useState({
     position: '', department: '', employeeId: '', managerId: '',
     phone: '', location: '', timezone: '', bio: '',
@@ -125,7 +126,52 @@ export function ProfilePage() {
               <div className="rounded-full ring-4 ring-[rgb(var(--surface))]">
                 <Avatar name={person.name} color={person.avatarColor} url={person.avatarUrl} size={78} />
               </div>
-              <div className="flex items-center gap-2 pb-1">
+              <div className="flex flex-wrap items-center gap-2 pb-1">
+                {!isSelf && (
+                  <>
+                    <button
+                      type="button"
+                      className="btn-primary text-[12px]"
+                      disabled={acting === 'dm'}
+                      onClick={async () => {
+                        setActing('dm');
+                        try {
+                          const channel = await openDm(person.id);
+                          navigate(`/channel/${channel.id}`);
+                        } catch (e: any) {
+                          toast({ title: 'Could not open the conversation', body: e.message, tone: 'error' });
+                        } finally {
+                          setActing(null);
+                        }
+                      }}
+                    >
+                      <MessageSquare size={13} /> {acting === 'dm' ? 'Opening…' : 'Message'}
+                    </button>
+                    <button
+                      type="button"
+                      className="btn-soft text-[12px]"
+                      disabled={acting === 'call' || !can('meeting.host')}
+                      title={can('meeting.host') ? 'Start an audio/video call' : 'Your role cannot host calls'}
+                      onClick={async () => {
+                        if (!team) return;
+                        setActing('call');
+                        try {
+                          const call = await createCall({
+                            title: `${user?.name || 'Someone'} & ${person.name}`,
+                            inviteeIds: [person.id],
+                          });
+                          navigate(`/meeting/${call.id}`);
+                        } catch (e: any) {
+                          toast({ title: 'Could not start the call', body: e.message, tone: 'error' });
+                        } finally {
+                          setActing(null);
+                        }
+                      }}
+                    >
+                      <Video size={13} /> {acting === 'call' ? 'Calling…' : 'Call'}
+                    </button>
+                  </>
+                )}
                 {isSelf && (
                   <button type="button" className="btn-outline text-[12px]" onClick={() => setEditing((v) => !v)}>
                     {editing ? <X size={13} /> : <Pencil size={13} />} {editing ? 'Cancel' : 'Edit profile'}

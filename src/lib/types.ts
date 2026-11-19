@@ -213,6 +213,33 @@ export interface UserProfile {
   teamRoles: { teamId: string; teamName: string; role: Role; joinedAt: string }[];
 }
 
+export interface DirectMessage {
+  channel: Channel;
+  partner: User;
+}
+
+export interface ReportPerson {
+  user: User;
+  role: Role;
+  tasks: { total: number; open: number; done: number; overdue: number };
+  messages: number;
+  meetingsHosted: number;
+  filesUploaded: number;
+  lastActiveAt: string | null;
+}
+
+export interface TeamReport {
+  team: Team;
+  generatedAt: string;
+  totals: {
+    people: number; tasks: number; tasksOpen: number; tasksDone: number;
+    tasksOverdue: number; messages: number; meetings: number; files: number;
+  };
+  people: ReportPerson[];
+  departments: { name: string; people: number; open: number; done: number; messages: number }[];
+  reportingLines: { userId: string; name: string; position: string; managerId: string | null; managerName: string | null }[];
+}
+
 export interface SearchResults {
   messages: (Message & { channelName: string })[];
   channels: Channel[];

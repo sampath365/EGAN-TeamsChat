@@ -21,7 +21,7 @@ export function ChannelPage() {
   const {
     channels, members, messages, user, typing, online, loadMessages, sendMessage, sendTyping,
     addChannelMembers, updateChannel, can, toast, createNote, updateNote, channelNotes, channelFiles,
-    createCall, team,
+    createCall, team, dms,
   } = useApp();
 
   const [tab, setTab] = useState<Tab>('chat');
@@ -36,6 +36,9 @@ export function ChannelPage() {
   const [profileId, setProfileId] = useState<string | null>(null);
 
   const channel = channels.find((c) => c.id === channelId);
+  const dmPartner = channel?.kind === 'dm' ? dms.find((d) => d.channel.id === channel.id)?.partner : undefined;
+  const isDm = channel?.kind === 'dm';
+  const displayName = isDm ? dmPartner?.name || 'Direct message' : channel?.name || '';
   const list = messages[channelId] || [];
   const typingHere = (typing[channelId] || []).filter((t) => t.name !== user?.name);
 
@@ -82,11 +85,23 @@ export function ChannelPage() {
         <header className="flex items-center justify-between gap-2 border-b px-3 py-2.5 backdrop-blur sm:px-4 bordered">
           <div className="min-w-0">
             <div className="flex items-center gap-1.5">
-              {channel.isPrivate ? <Lock size={15} className="text-muted" /> : <Hash size={16} className="text-muted" />}
-              <h1 className="truncate text-[15px] font-extrabold">{channel.name}</h1>
-              {channel.isPrivate && <Badge tone="violet">private</Badge>}
+              {isDm ? (
+                <Avatar name={displayName} color={dmPartner?.avatarColor} size={22} online={online.has(dmPartner?.id || '')} />
+              ) : channel.isPrivate ? (
+                <Lock size={15} className="text-muted" />
+              ) : (
+                <Hash size={16} className="text-muted" />
+              )}
+              <h1 className="truncate text-[15px] font-extrabold">{displayName}</h1>
+              {isDm && <Badge tone="brand">direct</Badge>}
+              {!isDm && channel.isPrivate && <Badge tone="violet">private</Badge>}
             </div>
-            {editTopic ? (
+            {isDm ? (
+              <p className="mt-0.5 truncate text-[11.5px] text-muted">
+                {dmPartner?.position || 'Direct message'}
+                {dmPartner?.department ? ` · ${dmPartner.department}` : ''}
+              </p>
+            ) : editTopic ? (
               <div className="mt-1 flex items-center gap-1.5">
                 <input
                   autoFocus
@@ -135,11 +150,16 @@ export function ChannelPage() {
           <Tabs
             value={tab}
             onChange={(v) => setTab(v)}
-            tabs={[
-              { key: 'chat', label: 'Chat', icon: <Hash size={13} /> },
-              { key: 'files', label: 'Files', icon: <FolderOpen size={13} /> },
-              { key: 'notes', label: 'Notes', icon: <StickyNote size={13} /> },
-            ]}
+            tabs={isDm
+              ? [
+                { key: 'chat', label: 'Chat', icon: <Hash size={13} /> },
+                { key: 'files', label: 'Files', icon: <FolderOpen size={13} /> },
+              ]
+              : [
+                { key: 'chat', label: 'Chat', icon: <Hash size={13} /> },
+                { key: 'files', label: 'Files', icon: <FolderOpen size={13} /> },
+                { key: 'notes', label: 'Notes', icon: <StickyNote size={13} /> },
+              ]}
           />
         </div>
 
@@ -151,10 +171,14 @@ export function ChannelPage() {
               ) : list.length === 0 ? (
                 <div className="mx-auto flex h-full max-w-md flex-col items-center justify-center px-6 text-center">
                   <div className="mb-3 flex h-14 w-14 items-center justify-center rounded-2xl grad-brand text-white">
-                    {channel.isPrivate ? <Lock size={24} /> : <Hash size={26} />}
+                    {isDm ? <Avatar name={displayName} color={dmPartner?.avatarColor} size={44} /> : channel.isPrivate ? <Lock size={24} /> : <Hash size={26} />}
                   </div>
-                  <p className="text-base font-extrabold">This is the start of #{channel.name}</p>
-                  <p className="mt-1 text-[12.5px] text-muted">{channel.topic || 'Say hi and set the tone for the channel.'}</p>
+                  <p className="text-base font-extrabold">
+                    {isDm ? `Start a conversation with ${displayName}` : `This is the start of #${channel.name}`}
+                  </p>
+                  <p className="mt-1 text-[12.5px] text-muted">
+                    {isDm ? 'Direct messages are only visible to the two of you.' : channel.topic || 'Say hi and set the tone for the channel.'}
+                  </p>
                 </div>
               ) : (
                 <MessageList channelId={channelId} messages={list} members={members} onOpenThread={setThread} />
@@ -174,7 +198,7 @@ export function ChannelPage() {
                   )}
                 </div>
                 <Composer
-                  channelName={channel.name}
+                  channelName={displayName}
                   members={members}
                   onSend={handleSend}
                   onTyping={(active) => sendTyping(channelId, active)}
@@ -194,7 +218,7 @@ export function ChannelPage() {
       {detailsOpen && (
         <aside className="hidden w-[290px] shrink-0 overflow-y-auto border-l bg-[rgb(var(--surface-2))] p-4 lg:block bordered animate-slide-left">
           <div className="mb-4 flex items-center justify-between">
-            <h3 className="text-[13px] font-bold">Channel details</h3>
+            <h3 className="text-[13px] font-bold">{isDm ? 'Conversation details' : 'Channel details'}</h3>
             <IconButton label="Close" onClick={() => setDetailsOpen(false)}><X size={15} /></IconButton>
           </div>
           <div className="card p-3.5">

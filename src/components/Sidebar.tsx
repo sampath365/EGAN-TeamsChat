@@ -3,7 +3,7 @@ import { Link, NavLink, useLocation, useNavigate } from 'react-router-dom';
 import {
   Bell, CalendarClock, ChevronDown, Hash, KanbanSquare, Lock, LogOut, MessageSquarePlus, Moon,
   Plus, Search, Settings, Sun, Users, Video, CheckSquare, FolderOpen, StickyNote, Sparkles, X,
-  Network, WifiOff,
+  Network, WifiOff, BarChart3,
 } from 'lucide-react';
 import { useApp } from '@/context/AppContext';
 import { cn } from '@/lib/utils';
@@ -13,7 +13,7 @@ export function Sidebar({ onOpenPalette, onClose, mobile }: { onOpenPalette: () 
   const {
     teams, teamId, team, channels, members, selectTeam, createTeam, createChannel, can, logout, user,
     notifications, unreadTotal, theme, setTheme, online, refreshNotifications, markNotificationsRead,
-    connection,
+    connection, dms,
   } = useApp();
   const navigate = useNavigate();
   const location = useLocation();
@@ -27,8 +27,8 @@ export function Sidebar({ onOpenPalette, onClose, mobile }: { onOpenPalette: () 
 
   useEffect(() => { void refreshNotifications(); }, [refreshNotifications]);
 
-  const publicChannels = useMemo(() => channels.filter((c) => !c.isPrivate), [channels]);
-  const privateChannels = useMemo(() => channels.filter((c) => c.isPrivate), [channels]);
+  const publicChannels = useMemo(() => channels.filter((c) => !c.isPrivate && c.kind !== 'dm'), [channels]);
+  const privateChannels = useMemo(() => channels.filter((c) => c.isPrivate && c.kind !== 'dm'), [channels]);
 
   const go = (path: string) => {
     navigate(path);
@@ -125,6 +125,7 @@ export function Sidebar({ onOpenPalette, onClose, mobile }: { onOpenPalette: () 
           <NavItem to="/tasks" icon={<KanbanSquare size={15} />} label="Tasks" onClick={onClose} />
           <NavItem to="/people" icon={<Users size={15} />} label="People" badge={members.length} onClick={onClose} />
           <NavItem to="/org" icon={<Network size={15} />} label="Company hierarchy" onClick={onClose} />
+          <NavItem to="/reports" icon={<BarChart3 size={15} />} label="Reports" onClick={onClose} />
         </Section>
 
         <div className="mb-1 mt-3 flex items-center justify-between px-2">
@@ -139,6 +140,41 @@ export function Sidebar({ onOpenPalette, onClose, mobile }: { onOpenPalette: () 
         {publicChannels.map((c) => (
           <ChannelItem key={c.id} id={c.id} name={c.name} unread={c.unread} active={location.pathname === `/channel/${c.id}`} onClick={onClose} />
         ))}
+
+        {dms.length > 0 && (
+          <>
+            <p className="mb-1 mt-3 flex items-center justify-between px-2 text-[10.5px] font-bold uppercase tracking-[0.11em] text-muted">
+              Direct messages
+              <span className="rounded-full bg-ink-100 px-1.5 text-[9.5px] dark:bg-white/10">{dms.length}</span>
+            </p>
+            {dms.map((dm) => (
+              <Link
+                key={dm.channel.id}
+                to={`/channel/${dm.channel.id}`}
+                onClick={onClose}
+                className={cn(
+                  'group flex items-center gap-2 rounded-xl px-2 py-[6px] text-[13px] transition',
+                  location.pathname === `/channel/${dm.channel.id}`
+                    ? 'bg-brand-50 font-bold text-brand-700 dark:bg-brand-500/15 dark:text-brand-200'
+                    : dm.channel.unread > 0
+                      ? 'font-bold text-ink-900 hover:bg-ink-100 dark:text-white dark:hover:bg-white/[0.06]'
+                      : 'font-medium text-ink-600 hover:bg-ink-100 dark:text-ink-400 dark:hover:bg-white/[0.06]',
+                )}
+              >
+                <Avatar name={dm.partner?.name || 'Unknown'} color={dm.partner?.avatarColor} size={22} online={online.has(dm.partner?.id || '')} />
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate">{dm.partner?.name || 'Unknown'}</span>
+                  {dm.partner?.position && <span className="block truncate text-[10px] font-normal text-muted">{dm.partner.position}</span>}
+                </span>
+                {dm.channel.unread > 0 && (
+                  <span className="flex h-[18px] min-w-[18px] items-center justify-center rounded-full bg-rose-500 px-1 text-[10px] font-bold text-white">
+                    {dm.channel.unread > 99 ? '99+' : dm.channel.unread}
+                  </span>
+                )}
+              </Link>
+            ))}
+          </>
+        )}
 
         {privateChannels.length > 0 && (
           <>

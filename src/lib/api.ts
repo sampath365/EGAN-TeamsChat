@@ -1,6 +1,6 @@
 import type {
-  CallRow, Channel, FileRow, Hierarchy, InviteRow, Message, Note, NotificationRow,
-  SearchResults, TaskItem, Team, TeamBundle, User, UserProfile,
+  CallRow, Channel, DirectMessage, FileRow, Hierarchy, InviteRow, Message, Note,
+  NotificationRow, SearchResults, TaskItem, Team, TeamBundle, TeamReport, User, UserProfile,
 } from './types';
 
 const TOKEN_KEY = 'egan.pulse.token';
@@ -65,6 +65,9 @@ export const api = {
   users: () => get<{ users: User[] }>('/users'),
   profile: (userId: string) => get<UserProfile>(`/users/${userId}`),
   hierarchy: (teamId: string) => get<Hierarchy>(`/teams/${teamId}/hierarchy`),
+  dms: () => get<{ dms: DirectMessage[] }>('/dms'),
+  openDm: (userId: string) => post<{ channel: Channel; partner: User; created: boolean }>(`/dms/${userId}`),
+  reports: (teamId: string) => get<TeamReport>(`/teams/${teamId}/reports`),
   updateOrg: (teamId: string, userId: string, input: Partial<Pick<User, 'position' | 'department' | 'employeeId' | 'managerId' | 'phone' | 'location' | 'timezone' | 'bio'>>) =>
     patch<{ user: User }>(`/teams/${teamId}/members/${userId}/org`, input),
 
@@ -157,7 +160,7 @@ export const api = {
 
   // meetings
   calls: (teamId: string) => get<{ calls: CallRow[] }>(`/teams/${teamId}/calls`),
-  createCall: (teamId: string, input: { title?: string; channelId?: string | null; scheduledAt?: string | null }) =>
+  createCall: (teamId: string, input: { title?: string; channelId?: string | null; scheduledAt?: string | null; inviteeIds?: string[] | null }) =>
     post<{ call: CallRow }>(`/teams/${teamId}/calls`, input),
   call: (callId: string) => get<{ call: CallRow; team: Team }>(`/calls/${callId}`),
   updateCall: (callId: string, input: { status?: string }) => patch<{ call: CallRow }>(`/calls/${callId}`, input),

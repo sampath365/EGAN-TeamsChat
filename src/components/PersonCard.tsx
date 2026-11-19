@@ -2,24 +2,25 @@ import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import {
   Briefcase, Building2, CalendarDays, Clock, Mail, MapPin, MessageSquare, Phone,
-  UserRound, X, ChevronRight, Users,
+  UserRound, X, ChevronRight, Users, Video, BarChart3,
 } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
 import { api } from '@/lib/api';
 import type { User, UserProfile } from '@/lib/types';
 import { cn, timeAgo } from '@/lib/utils';
 import { Avatar, Badge, IconButton, Spinner } from './ui';
+import { useApp } from '@/context/AppContext';
 
 const ROLE_TONE: Record<string, 'brand' | 'violet' | 'neutral' | 'amber'> = {
   owner: 'amber', admin: 'violet', member: 'brand', guest: 'neutral', bot: 'neutral',
 };
 
 export function PersonCard({
-  userId, open, onClose, onMessage,
+  userId, open, onClose,
 }: {
   userId: string | null;
   open: boolean;
   onClose: () => void;
-  onMessage?: (user: User) => void;
 }) {
   const [data, setData] = useState<UserProfile | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -50,18 +51,50 @@ export function PersonCard({
             <button type="button" className="btn-ghost mt-3" onClick={onClose}>Close</button>
           </div>
         ) : data ? (
-          <PersonCardBody data={data} onClose={onClose} onMessage={onMessage} />
+          <PersonCardBody data={data} onClose={onClose} />
         ) : null}
       </div>
     </div>
   );
 }
 
-function PersonCardBody({
-  data, onClose, onMessage,
-}: { data: UserProfile; onClose: () => void; onMessage?: (u: User) => void }) {
+function PersonCardBody({ data, onClose }: { data: UserProfile; onClose: () => void }) {
   const { user, manager, reports, teamRoles } = data;
   const primaryRole = teamRoles[0]?.role;
+  const navigate = useNavigate();
+  const { user: me, team, openDm, createCall, can, toast } = useApp();
+  const [busy, setBusy] = useState<'dm' | 'call' | null>(null);
+  const isSelf = me?.id === user.id;
+
+  const startDm = async () => {
+    setBusy('dm');
+    try {
+      const channel = await openDm(user.id);
+      onClose();
+      navigate(`/channel/${channel.id}`);
+    } catch (e: any) {
+      toast({ title: 'Could not open the conversation', body: e.message, tone: 'error' });
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const startCall = async () => {
+    if (!team) return;
+    setBusy('call');
+    try {
+      const call = await createCall({
+        title: `${me?.name || 'Someone'} & ${user.name}`,
+        inviteeIds: [user.id],
+      });
+      onClose();
+      navigate(`/meeting/${call.id}`);
+    } catch (e: any) {
+      toast({ title: 'Could not start the call', body: e.message, tone: 'error' });
+    } finally {
+      setBusy(null);
+    }
+  };
 
   return (
     <>
@@ -157,15 +190,37 @@ function PersonCardBody({
       )}
 
       {/* actions */}
-      <div className="flex items-center gap-2 border-t px-4 py-3 bordered">
-        {onMessage && (
-          <button type="button" className="btn-primary flex-1 text-[12.5px]" onClick={() => { onMessage(user); onClose(); }}>
-            <MessageSquare size={14} /> Message
-          </button>
+      <div className="border-t px-4 py-3 bordered">
+        {isSelf ? (
+          <Link to="/profile" onClick={onClose} className="btn-primary w-full text-[12.5px]">
+            <UserRound size={14} /> Edit my profile
+          </Link>
+        ) : (
+          <>
+            <div className="flex items-center gap-2">
+              <button type="button" className="btn-primary flex-1 text-[12.5px]" disabled={busy === 'dm'} onClick={() => void startDm()}>
+                <MessageSquare size={14} /> {busy === 'dm' ? 'Opening…' : 'Message'}
+              </button>
+              <button
+                type="button"
+                className="btn-soft flex-1 text-[12.5px]"
+                disabled={busy === 'call' || !can('meeting.host')}
+                title={can('meeting.host') ? 'Start an audio/video call' : 'Your role cannot host calls'}
+                onClick={() => void startCall()}
+              >
+                <Video size={14} /> {busy === 'call' ? 'Calling…' : 'Call'}
+              </button>
+            </div>
+            <div className="mt-1.5 flex items-center gap-2">
+              <Link to={`/profile/${user.id}`} onClick={onClose} className="btn-outline flex-1 text-[12px]">
+                <UserRound size={13} /> Profile
+              </Link>
+              <Link to="/reports" onClick={onClose} className="btn-outline flex-1 text-[12px]">
+                <BarChart3 size={13} /> Reports
+              </Link>
+            </div>
+          </>
         )}
-        <Link to={`/profile/${user.id}`} onClick={onClose} className="btn-outline flex-1 text-[12.5px]">
-          <UserRound size={14} /> Full profile <ChevronRight size={13} />
-        </Link>
       </div>
     </>
   );
